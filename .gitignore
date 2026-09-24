@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Ambiente virtual
+.venv/
+venv/
+env/
+
+# Banco de dados SQLite (dados do usuário)
+simples_app/instance/*.db
+
+# Backups manuais
+_backup/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.sublime-*
+
+# Sistema
+Thumbs.db
+.DS_Store

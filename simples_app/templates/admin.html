@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Usuários</h1>
+    <p>Cadastro, permissões e status de acesso.</p>
+  </div>
+  <a class="btn" href="{{ url_for('admin_usuario_novo') }}">+ Novo usuário</a>
+</div>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Nome</th>
+        <th>E-mail</th>
+        <th>Perfil</th>
+        <th>Status</th>
+        <th>Criado em</th>
+        <th class="num">Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in usuarios %}
+      <tr>
+        <td>{{ u.nome }}</td>
+        <td>{{ u.email }}</td>
+        <td>{% if u.is_admin %}<span class="badge admin">Administrador</span>{% else %}Usuário{% endif %}</td>
+        <td>
+          {% if u.ativo %}<span class="badge ativo">Ativo</span>
+          {% else %}<span class="badge inativo">Inativo</span>{% endif %}
+        </td>
+        <td>{{ u.criado_em }}</td>
+        <td class="num">
+          <div class="acoes" style="justify-content:flex-end">
+            <a class="btn secundario pequeno" href="{{ url_for('admin_usuario_editar', user_id=u.id) }}">Editar</a>
+            {% if u.id != g.usuario.id %}
+            <form method="post" action="{{ url_for('admin_usuario_excluir', user_id=u.id) }}"
+                  onsubmit="return confirm('Excluir o usuário {{ u.nome }} e todos os seus dados?');">
+              <button type="submit" class="btn perigo pequeno">Excluir</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

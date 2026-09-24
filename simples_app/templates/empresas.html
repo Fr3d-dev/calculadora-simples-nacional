@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block titulo %}Empresas · Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Empresas</h1>
+    <p>Cadastre o CNAE principal e o sistema sugere o Anexo do Simples Nacional.</p>
+  </div>
+  <div class="acoes">
+    <a class="btn" href="{{ url_for('empresa_nova') }}">➕ Nova empresa</a>
+  </div>
+</div>
+
+{% set ativa = empresa_ativa() %}
+
+<div class="card">
+  {% if empresas %}
+  <div class="tabela-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Razão social</th>
+        <th>CNPJ</th>
+        <th>CNAE principal</th>
+        <th>Anexo</th>
+        <th style="width:210px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in empresas %}
+      <tr>
+        <td>
+          <strong>{{ e.razao_social }}</strong>
+          {% if ativa and ativa.id == e.id %}<span class="badge ok" style="margin-left:6px">ativa</span>{% endif %}
+          {% if e.nome_fantasia %}<div class="texto-suave">{{ e.nome_fantasia }}</div>{% endif %}
+        </td>
+        <td>{{ e.cnpj or '—' }}</td>
+        <td>
+          {% set sug = sugerir_anexo(e.cnae_principal, e.cnae_descricao) %}
+          <strong>{{ e.cnae_principal or '—' }}</strong>
+          {% if e.cnae_descricao %}<div class="texto-suave">{{ e.cnae_descricao }}</div>{% endif %}
+        </td>
+        <td>
+          {% set anexo_final = e.anexo_confirmado or sug.anexo %}
+          {% if anexo_final %}
+            <span class="badge anexo">Anexo {{ anexo_final }}</span>
+            {% if not e.anexo_confirmado %}
+            <div class="texto-suave" style="font-size:11.5px">sugerido ({{ sug.confianca }})</div>
+            {% endif %}
+          {% else %}
+            <span class="badge aviso">indefinido</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="acoes" style="margin:0;justify-content:flex-end;gap:6px">
+            {% if not (ativa and ativa.id == e.id) %}
+            <form method="post" action="{{ url_for('empresa_selecionar', empresa_id=e.id) }}" style="display:inline">
+              <button type="submit" class="btn secundario pequeno">Usar</button>
+            </form>
+            {% endif %}
+            <a class="btn secundario pequeno" href="{{ url_for('empresa_editar', empresa_id=e.id) }}">Editar</a>
+            <form method="post" action="{{ url_for('empresa_excluir', empresa_id=e.id) }}" style="display:inline"
+                  onsubmit="return confirm('Excluir a empresa {{ e.razao_social }}?');">
+              <button type="submit" class="btn perigo pequeno">Excluir</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="vazio">Nenhuma empresa cadastrada ainda.
+    <a href="{{ url_for('empresa_nova') }}">Cadastre a primeira empresa</a> para começar.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Como funciona o enquadramento</h2>
+  <p class="texto-suave" style="margin-top:0">
+    Informe o CNAE principal e a descrição da atividade. O sistema identifica o grupo
+    de atividade e sugere o Anexo (I a V). Você pode confirmar ou ajustar manualmente.
+  </p>
+  <div class="tabela-scroll">
+  <table>
+    <thead>
+      <tr><th>Grupo de atividade</th><th>Faixa de CNAE</th><th>Anexo sugerido</th></tr>
+    </thead>
+    <tbody>
+      {% for g in grupos %}
+      <tr>
+        <td>{{ g.descricao }}</td>
+        <td>{{ g.prefixos | join(', ') }}</td>
+        <td><span class="badge anexo">Anexo {{ g.anexo }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="texto-suave" style="margin-bottom:0;font-size:12.5px">
+    ⚠️ A sugestão é uma orientação automática. O enquadramento definitivo depende das
+    atividades secundárias, do faturamento e do fator R — confirme com seu contador.
+  </p>
+</div>
+{% endblock %}

@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block titulo %}Dashboard · Calculadora Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Dashboard</h1>
+    <p>
+      Visão geral do Simples Nacional — {{ alvo.nome }}
+      {% if g.usuario.is_admin %} · empresa do usuário selecionado{% endif %}
+    </p>
+  </div>
+  {% if g.usuario.is_admin %}
+  <form method="get" class="acoes">
+    <label style="margin:0">Usuário:</label>
+    <select name="usuario_id" onchange="this.form.submit()" style="width:auto">
+      {% for u in usuarios %}
+        <option value="{{ u.id }}" {{ 'selected' if u.id == alvo.id }}>{{ u.nome }} ({{ u.email }})</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+
+{% if sem_anexo %}
+<div class="card">
+  <h2>Nenhum anexo identificado</h2>
+  <p class="texto-suave">
+    Não foi possível identificar o Anexo do Simples Nacional (I a V) para
+    {{ alvo.nome }}. Cadastre a empresa informando o CNAE principal para que a
+    sugestão de anexo seja calculada automaticamente.
+  </p>
+  <div class="acoes" style="margin-top:14px">
+    <a class="btn" href="{{ url_for('empresas') }}">Ir para empresas</a>
+  </div>
+</div>
+{% else %}
+<div class="grid grid-4" style="margin-bottom:18px">
+  <div class="kpi">
+    <div class="rotulo">Faturamento do mês (total)</div>
+    <div class="valor">{{ total_fat_mes | formatar_moeda }}</div>
+    <div class="sub">
+      Soma {{ 'dos anexos identificados' if resumos | length > 1 else 'do anexo identificado' }}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">DAS total estimado</div>
+    <div class="valor">{{ total_das | formatar_moeda }}</div>
+    <div class="sub">
+      Soma {{ 'dos anexos identificados' if resumos | length > 1 else 'do anexo identificado' }}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">Maior RBT12</div>
+    <div class="valor">{{ max_rbt12 | formatar_moeda }}</div>
+    <div class="sub">
+      Entre {{ 'os anexos identificados' if resumos | length > 1 else 'o anexo identificado' }}
+    </div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">Alíquota efetiva média</div>
+    <div class="valor">
+      {% if total_fat_mes > 0 %}
+        {{ (total_das / total_fat_mes) | formatar_percentual }}
+      {% else %}
+        0,00%
+      {% endif %}
+    </div>
+    <div class="sub">DAS ÷ faturamento</div>
+  </div>
+</div>
+
+{% if resumos %}
+<div class="lista-anexos">
+  {% for r in resumos %}
+  <div class="linha-anexo">
+    <div class="identificacao">
+      <span class="badge anexo">Anexo {{ r.anexo }}</span>
+      <span class="faixa-anexo">
+        {% if r.faixa %}{{ r.faixa }}ª faixa{% else %}—{% endif %}
+      </span>
+      <a class="abrir" href="{{ url_for('anexo_view', anexo=r.anexo, usuario_id=alvo.id) }}">abrir calculadora →</a>
+    </div>
+    <div class="resultado-grid">
+      <div class="resultado-item">
+        <div class="rotulo">Faturamento do mês</div>
+        <div class="valor">{{ r.faturamento_mes | formatar_moeda }}</div>
+      </div>
+      <div class="resultado-item">
+        <div class="rotulo">RBT12</div>
+        <div class="valor">{{ r.rbt12 | formatar_moeda }}</div>
+      </div>
+      <div class="resultado-item">
+        <div class="rotulo">Alíquota efetiva</div>
+        <div class="valor">{{ r.aliquota_efetiva | formatar_percentual }}</div>
+      </div>
+      <div class="resultado-item destaque">
+        <div class="rotulo">DAS</div>
+        <div class="valor">{{ r.das | formatar_moeda }}</div>
+      </div>
+    </div>
+
+    {% if r.reparticao_detalhada %}
+    <div class="reparticao">
+      <div class="reparticao-cabecalho">
+        <span class="reparticao-titulo">Repartição do imposto</span>
+        <span class="reparticao-faixa">{{ r.faixa }}ª faixa</span>
+      </div>
+      <div class="reparticao-grid">
+        {% for t in r.reparticao_detalhada %}
+        <div class="reparticao-item">
+          <div class="reparticao-tributo">{{ t.tributo }}</div>
+          <div class="reparticao-percentual">{{ t.percentual | formatar_percentual(4) }}</div>
+          <div class="reparticao-valor">{{ t.valor | formatar_moeda }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Resumo em tabela</h2>
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Anexo</th>
+          <th class="num">Faturamento do mês</th>
+          <th class="num">RBT12</th>
+          <th class="num">Faixa</th>
+          <th class="num">Alíq. nominal</th>
+          <th class="num">Valor a deduzir</th>
+          <th class="num">Alíq. efetiva</th>
+          <th class="num">DAS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in resumos %}
+        <tr>
+          <td><a href="{{ url_for('anexo_view', anexo=r.anexo, usuario_id=alvo.id) }}">Anexo {{ r.anexo }}</a></td>
+          <td class="num">{{ r.faturamento_mes | formatar_moeda }}</td>
+          <td class="num">{{ r.rbt12 | formatar_moeda }}</td>
+          <td class="num">{{ r.faixa or '—' }}{% if r.faixa %}ª{% endif %}</td>
+          <td class="num">{{ r.aliquota_nominal | formatar_percentual }}</td>
+          <td class="num">{{ r.valor_deduzir | formatar_moeda }}</td>
+          <td class="num">{{ r.aliquota_efetiva | formatar_percentual }}</td>
+          <td class="num"><strong>{{ r.das | formatar_moeda }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr style="background:#f8fafc;font-weight:700">
+          <td>Total</td>
+          <td class="num">{{ total_fat_mes | formatar_moeda }}</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">{{ total_das | formatar_moeda }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

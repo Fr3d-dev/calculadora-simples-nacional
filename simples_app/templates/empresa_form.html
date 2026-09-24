@@ -1,0 +1,513 @@
+{% extends "base.html" %}
+{% block titulo %}{{ 'Nova empresa' if acao == 'nova' else 'Editar empresa' }} · Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>{{ 'Nova empresa' if acao == 'nova' else 'Editar empresa' }}</h1>
+    <p>
+      {% if acao == 'nova' %}
+        Comece informando o CNPJ: os dados da empresa são buscados automaticamente
+        na base da Receita Federal e o Anexo é sugerido pelo CNAE.
+      {% else %}
+        Informe o CNAE principal — a sugestão de Anexo é calculada automaticamente.
+      {% endif %}
+    </p>
+  </div>
+  <div class="acoes">
+    <a class="btn secundario" href="{{ url_for('empresas') }}">← Voltar</a>
+  </div>
+</div>
+
+<form method="post" class="grid" style="grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr)">
+
+  <!-- ------------------------- Coluna esquerda: empresa ------------------------- -->
+  <div>
+    <div class="card">
+      <h2>Dados da empresa</h2>
+
+      <div id="painel-receita" class="aviso-caixa" style="display:none;margin-bottom:14px"></div>
+
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div style="grid-column:1/-1">
+          <label for="cnpj">CNPJ *</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="cnpj" name="cnpj" maxlength="18"
+                   value="{{ empresa.cnpj if empresa else '' }}"
+                   placeholder="00.000.000/0001-00" autocomplete="off"
+                   {% if acao == 'nova' %}autofocus{% endif %}>
+            <button type="button" class="btn secundario" id="btn-buscar-cnpj"
+                    title="Buscar os dados na base da Receita Federal"
+                    style="white-space:nowrap">🔎 Buscar dados</button>
+          </div>
+          <div class="texto-suave" id="status-cnpj" style="margin-top:4px">
+            <strong>Opcional:</strong> clique em <strong>🔎 Buscar dados</strong> para
+            preencher automaticamente pela Receita Federal — ou simplesmente
+            preencha os campos abaixo manualmente.
+          </div>
+        </div>
+
+        <div style="grid-column:1/-1">
+          <label for="razao_social">Razão social *</label>
+          <input type="text" id="razao_social" name="razao_social" required
+                 value="{{ empresa.razao_social if empresa else '' }}"
+                 placeholder="Ex.: Comercial Exemplo LTDA">
+        </div>
+        <div>
+          <label for="nome_fantasia">Nome fantasia</label>
+          <input type="text" id="nome_fantasia" name="nome_fantasia"
+                 value="{{ empresa.nome_fantasia if empresa else '' }}">
+        </div>
+        <div>
+          <label for="municipio">Município</label>
+          <input type="text" id="municipio" name="municipio"
+                 value="{{ empresa.municipio if empresa else '' }}">
+        </div>
+        <div>
+          <label for="uf">UF</label>
+          <input type="text" id="uf" name="uf" maxlength="2"
+                 value="{{ empresa.uf if empresa else '' }}" placeholder="SP">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Atividade (CNAE)</h2>
+
+      <div class="linha-cnae">
+        <div>
+          <label for="cnae_principal">CNAE principal</label>
+          <input type="text" id="cnae_principal" name="cnae_principal"
+                 value="{{ empresa.cnae_principal if empresa else '' }}"
+                 placeholder="47.11-3/02" autocomplete="off">
+          <div class="texto-suave">Aceita 7 dígitos ou formato com pontuação.</div>
+        </div>
+        <div>
+          <label for="cnae_descricao">Descrição da atividade</label>
+          <input type="text" id="cnae_descricao" name="cnae_descricao"
+                 value="{{ empresa.cnae_descricao if empresa else '' }}"
+                 placeholder="Ex.: Comércio varejista de mercadorias em geral" autocomplete="off">
+        </div>
+      </div>
+
+      <div style="margin-top:14px">
+        <label for="cnaes_secundarios">CNAEs secundários</label>
+        <textarea id="cnaes_secundarios" name="cnaes_secundarios" rows="3"
+                  placeholder="Um por linha. Ex.: 56.11-2/03 Restaurante e similares">{{ empresa.cnaes_secundarios if empresa else '' }}</textarea>
+      </div>
+
+      <div class="acoes" style="margin-top:14px">
+        <button type="button" class="btn secundario" id="btn-sugerir">🔍 Sugerir Anexo pelo CNAE</button>
+        <button type="button" class="btn secundario" id="btn-quadro">📋 Gerar quadro CNAE · Anexo</button>
+        <a href="{{ url_for('empresas') }}" class="texto-suave" style="font-size:12.5px">ver tabela de grupos</a>
+      </div>
+
+      <div id="caixa-sugestao" class="resultado" style="display:none;margin-top:14px"></div>
+
+      <!-- Quadro CNAE · Descrição · Anexo (informativo; não é salvo) -->
+      <div id="quadro-cnae" style="display:none;margin-top:16px">
+        <div class="texto-suave" style="font-size:12px;margin-bottom:8px">
+          Quadro informativo. O anexo é sempre calculado automaticamente pelo sistema
+          {% if not is_admin %}e não pode ser alterado.{% else %}— administradores podem
+          escolher um anexo diferente apenas para conferência nesta tela.{% endif %}
+        </div>
+        <div class="tabela-quadro">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:26%">CNAE</th>
+                <th>Descrição</th>
+                <th style="width:22%">Anexo</th>
+              </tr>
+            </thead>
+            <tbody id="quadro-cnae-corpo"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Observações</h2>
+      <textarea name="observacoes" rows="3"
+                placeholder="Anotações internas sobre o enquadramento, atividades, etc.">{{ empresa.observacoes if empresa else '' }}</textarea>
+      <div class="acoes" style="margin-top:16px">
+        <button type="submit" class="btn">💾 Salvar empresa</button>
+        <a class="btn secundario" href="{{ url_for('empresas') }}">Cancelar</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ------------------------- Coluna direita: anexo --------------------------- -->
+  <div>
+    <div class="card" style="position:sticky;top:16px">
+      <h2>Enquadramento no Simples</h2>
+
+      <div class="campo">
+        <label for="anexo_confirmado">Anexo definido</label>
+        <select id="anexo_confirmado" name="anexo_confirmado">
+          <option value="">— não definido —</option>
+          {% for a in anexos_simples %}
+          <option value="{{ a }}"
+            {{ 'selected' if empresa and empresa.anexo_confirmado == a else '' }}>
+            Anexo {{ a }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <input type="hidden" id="anexo_sugerido" name="anexo_sugerido"
+             value="{{ empresa.anexo_sugerido if empresa else '' }}">
+
+      <div class="kpi">
+        <div class="rotulo">Sugestão automática</div>
+        <div class="valor" id="valor-sugestao">
+          {% if empresa and empresa.anexo_sugerido %}
+            Anexo {{ empresa.anexo_sugerido }}
+          {% else %}
+            —
+          {% endif %}
+        </div>
+        <div class="texto-suave" id="detalhe-sugestao" style="font-size:12px"></div>
+      </div>
+
+      <div id="observacao-sugestao" class="aviso-caixa" style="display:none"></div>
+
+      <div class="texto-suave" style="font-size:12px;line-height:1.5;margin-top:12px">
+        <strong>Regras gerais</strong>
+        <ul style="margin:6px 0 0;padding-left:18px">
+          <li><strong>Anexo I</strong> — comércio (lojas, varejo, restaurantes).</li>
+          <li><strong>Anexo II</strong> — indústria e industrialização.</li>
+          <li><strong>Anexo III</strong> — serviços gerais (locação, transporte, ensino).</li>
+          <li><strong>Anexo IV</strong> — construção civil, vigilância, limpeza.</li>
+          <li><strong>Anexo V</strong> — serviços intelectuais; usa o fator R
+              (folha ÷ RBT12 ≥ 28% migra para o Anexo III).</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const campoCnae = document.getElementById('cnae_principal');
+  const campoDesc = document.getElementById('cnae_descricao');
+  const btn = document.getElementById('btn-sugerir');
+  const caixa = document.getElementById('caixa-sugestao');
+  const valorSug = document.getElementById('valor-sugestao');
+  const detalheSug = document.getElementById('detalhe-sugestao');
+  const obsSug = document.getElementById('observacao-sugestao');
+  const escondido = document.getElementById('anexo_sugerido');
+  const selectAnexo = document.getElementById('anexo_confirmado');
+
+  async function sugerir() {
+    const cnae = campoCnae.value.trim();
+    const descricao = campoDesc.value.trim();
+    if (!cnae && !descricao) {
+      alert('Informe o CNAE ou a descrição da atividade.');
+      return;
+    }
+    caixa.style.display = 'block';
+    caixa.textContent = 'Consultando…';
+
+    try {
+      const resp = await fetch('{{ url_for("api_cnae_sugerir") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cnae: cnae, descricao: descricao })
+      });
+      const dados = await resp.json();
+
+      const anexo = dados.anexo ? ('Anexo ' + dados.anexo) : 'não identificado';
+      caixa.innerHTML =
+        '<strong>Sugestão:</strong> ' + anexo +
+        (dados.descricao_grupo ? ' — ' + dados.descricao_grupo : '');
+
+      valorSug.textContent = anexo;
+      detalheSug.textContent = dados.descricao_grupo
+        ? dados.descricao_grupo + ' · confiança ' + dados.confianca
+        : 'confiança ' + dados.confianca;
+
+      if (dados.observacao) {
+        obsSug.style.display = 'block';
+        obsSug.textContent = 'ℹ️ ' + dados.observacao;
+      } else {
+        obsSug.style.display = 'none';
+      }
+
+      escondido.value = dados.anexo || '';
+      if (dados.anexo && !selectAnexo.value) {
+        selectAnexo.value = dados.anexo;
+      }
+    } catch (err) {
+      caixa.textContent = 'Erro ao consultar a sugestão: ' + err;
+    }
+  }
+
+  btn.addEventListener('click', sugerir);
+})();
+
+/* --------------- Quadro CNAE · Descrição · Anexo (informativo) --------------- */
+(function () {
+  const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+  const ANEXOS = ['I', 'II', 'III', 'IV', 'V'];
+
+  const btn = document.getElementById('btn-quadro');
+  const corpo = document.getElementById('quadro-cnae-corpo');
+  const caixa = document.getElementById('quadro-cnae');
+  const campoPrincipal = document.getElementById('cnae_principal');
+  const campoDesc = document.getElementById('cnae_descricao');
+  const campoSec = document.getElementById('cnaes_secundarios');
+
+  // Escapa texto antes de injetar no HTML (evita quebra de layout com "<", "&").
+  function escapar(txt) {
+    const div = document.createElement('div');
+    div.textContent = txt == null ? '' : String(txt);
+    return div.innerHTML;
+  }
+
+  function celulaAnexo(linha) {
+    if (!IS_ADMIN) {
+      if (!linha.anexo) return '<span class="badge-anexo sem-anexo">não identificado</span>';
+      return '<span class="badge-anexo">Anexo ' + escapar(linha.anexo) + '</span>';
+    }
+
+    // Administrador: seletor editável, pré-selecionado com a sugestão automática.
+    const opcoes = ['<option value="">— não definido —</option>']
+      .concat(ANEXOS.map(function (a) {
+        const sel = (linha.anexo === a) ? ' selected' : '';
+        return '<option value="' + a + '"' + sel + '>Anexo ' + a + '</option>';
+      }))
+      .join('');
+
+    const titulo = linha.descricao_grupo
+      ? ' title="Sugestão automática: ' + escapar(linha.descricao_grupo) +
+        ' (confiança ' + escapar(linha.confianca) + ')"'
+      : '';
+
+    return '<select class="anexo-select" data-codigo="' + escapar(linha.codigo) + '"' +
+           titulo + '>' + opcoes + '</select>';
+  }
+
+  function linhaSeparador(texto) {
+    return '<tr class="linha-separador"><td colspan="3">' + escapar(texto) + '</td></tr>';
+  }
+
+  function montarTabela(linhas) {
+    var principais = linhas.filter(function (l) { return l.escopo === 'principal'; });
+    var secundarios = linhas.filter(function (l) { return l.escopo === 'secundario'; });
+
+    // Usuário comum só enxerga CNAEs que resultaram em um anexo definido.
+    // Se nenhum CNAE tiver anexo, o quadro inteiro fica oculto.
+    if (!IS_ADMIN) {
+      principais = principais.filter(function (l) { return l.anexo; });
+      secundarios = secundarios.filter(function (l) { return l.anexo; });
+
+      if (!principais.length && !secundarios.length) {
+        caixa.style.display = 'none';
+        corpo.innerHTML = '';
+        return;
+      }
+    }
+
+    var partes = [];
+
+    if (principais.length) {
+      partes.push(linhaSeparador('CNAE principal'));
+      partes.push(principais.map(montarLinha).join(''));
+    }
+
+    if (secundarios.length) {
+      partes.push(linhaSeparador('CNAEs secundários'));
+      partes.push(secundarios.map(montarLinha).join(''));
+    }
+
+    // Para o admin, mantém as seções vazias explícitas (ele vê o quadro completo).
+    if (IS_ADMIN) {
+      if (!principais.length) {
+        partes.splice(1, 0, '<tr><td colspan="3" class="texto-suave">Não informado.</td></tr>');
+      }
+      if (!secundarios.length) {
+        partes.push('<tr><td colspan="3" class="texto-suave">' +
+                    'Nenhum CNAE secundário informado.</td></tr>');
+      }
+    }
+
+    corpo.innerHTML = partes.join('');
+    caixa.style.display = 'block';
+  }
+
+  function montarLinha(linha) {
+    const classe = linha.escopo === 'principal' ? ' class="linha-principal"' : '';
+    return '<tr' + classe + '>' +
+      '<td class="codigo-cnae">' + (escapar(linha.codigo) || '—') + '</td>' +
+      '<td>' + (escapar(linha.descricao) || '<span class="texto-suave">sem descrição</span>') + '</td>' +
+      '<td>' + celulaAnexo(linha) + '</td>' +
+    '</tr>';
+  }
+
+  async function gerarQuadro() {
+    caixa.style.display = 'block';
+    corpo.innerHTML = '<tr><td colspan="3" class="texto-suave">Consultando…</td></tr>';
+
+    try {
+      const resp = await fetch('{{ url_for("api_cnae_quadro") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cnae_principal: campoPrincipal ? campoPrincipal.value.trim() : '',
+          cnae_descricao: campoDesc ? campoDesc.value.trim() : '',
+          cnaes_secundarios: campoSec ? campoSec.value : ''
+        })
+      });
+      const dados = await resp.json();
+      montarTabela(dados.linhas || []);
+    } catch (err) {
+      if (!IS_ADMIN) {
+        caixa.style.display = 'none';
+        corpo.innerHTML = '';
+      } else {
+        corpo.innerHTML = '<tr><td colspan="3" class="texto-suave">' +
+                          'Erro ao gerar o quadro: ' + escapar(err.message) + '</td></tr>';
+      }
+    }
+  }
+
+  if (btn) btn.addEventListener('click', gerarQuadro);
+})();
+
+/* ------------------------- Consulta de CNPJ (Receita) ------------------------- */
+(function () {
+  const campoCnpj = document.getElementById('cnpj');
+  const btnBuscar = document.getElementById('btn-buscar-cnpj');
+  const status = document.getElementById('status-cnpj');
+  const painel = document.getElementById('painel-receita');
+
+  const el = (id) => document.getElementById(id);
+  const setVal = (id, valor) => {
+    const campo = el(id);
+    if (campo && valor) campo.value = valor;
+  };
+
+  function soDigitos(v) {
+    return (v || '').replace(/\D/g, '');
+  }
+
+  function mascaraCnpj(v) {
+    const d = soDigitos(v).slice(0, 14);
+    let out = d;
+    if (d.length > 2) out = d.slice(0, 2) + '.' + d.slice(2);
+    if (d.length > 5) out = out.slice(0, 6) + '.' + d.slice(5);
+    if (d.length > 8) out = out.slice(0, 10) + '/' + d.slice(8);
+    if (d.length > 12) out = out.slice(0, 15) + '-' + d.slice(12);
+    return out;
+  }
+
+  campoCnpj.addEventListener('input', () => {
+    campoCnpj.value = mascaraCnpj(campoCnpj.value);
+  });
+
+  async function buscarCnpj() {
+    const digitos = soDigitos(campoCnpj.value);
+    if (digitos.length !== 14) {
+      status.textContent = '⚠️ Informe os 14 dígitos do CNPJ.';
+      status.style.color = 'var(--vermelho)';
+      return;
+    }
+
+    btnBuscar.disabled = true;
+    status.style.color = '';
+    status.textContent = 'Consultando a Receita Federal…';
+    painel.style.display = 'none';
+
+    try {
+      const resp = await fetch('{{ url_for("api_consulta_cnpj", cnpj="__CNPJ__") }}'
+                               .replace('__CNPJ__', digitos));
+      const dados = await resp.json();
+
+      if (!resp.ok || dados.erro) {
+        throw new Error(dados.erro || 'Falha na consulta.');
+      }
+
+      setVal('razao_social', dados.razao_social);
+      setVal('nome_fantasia', dados.nome_fantasia);
+      setVal('municipio', dados.municipio);
+      setVal('uf', dados.uf);
+      setVal('cnae_principal', dados.cnae_principal_fmt || dados.cnae_principal);
+      setVal('cnae_descricao', dados.cnae_descricao);
+
+      const campoSec = el('cnaes_secundarios');
+      if (campoSec && dados.cnaes_secundarios_texto) {
+        campoSec.value = dados.cnaes_secundarios_texto;
+      }
+
+      // Gera o quadro CNAE · Descrição · Anexo com os dados vindos da Receita.
+      const btnQuadro = el('btn-quadro');
+      if (btnQuadro) btnQuadro.click();
+
+      // Atualiza o painel de sugestão de anexo.
+      const sug = dados.sugestao_anexo || {};
+      const anexoTxt = sug.anexo ? ('Anexo ' + sug.anexo) : 'não identificado';
+      el('valor-sugestao').textContent = anexoTxt;
+      el('detalhe-sugestao').textContent = sug.descricao_grupo
+        ? sug.descricao_grupo + ' · confiança ' + sug.confianca
+        : ('confiança ' + sug.confianca);
+      if (sug.observacao) {
+        const obs = el('observacao-sugestao');
+        obs.style.display = 'block';
+        obs.textContent = 'ℹ️ ' + sug.observacao;
+      }
+      el('anexo_sugerido').value = sug.anexo || '';
+      const selectAnexo = el('anexo_confirmado');
+      if (sug.anexo && !selectAnexo.value) selectAnexo.value = sug.anexo;
+
+      // Painel com informações cadastrais.
+      const simples = dados.opcao_pelo_simples;
+      const simplesTxt = simples === true
+        ? 'Sim ✅'
+        : (simples === false ? 'Não ❌' : 'Não informado');
+
+      painel.style.display = 'block';
+      painel.innerHTML =
+        '<strong>Dados da Receita Federal</strong> — ' +
+        (dados.fonte || '') + '<br>' +
+        '<strong>Situação:</strong> ' + (dados.situacao_cadastral || '—') +
+        ' &nbsp;|&nbsp; <strong>Opção pelo Simples:</strong> ' + simplesTxt +
+        (dados.data_opcao_pelo_simples
+          ? ' (desde ' + dados.data_opcao_pelo_simples + ')' : '') +
+        '<br>' +
+        '<strong>Porte:</strong> ' + (dados.porte || '—') +
+        ' &nbsp;|&nbsp; <strong>Natureza:</strong> ' + (dados.natureza_juridica || '—') +
+        ' &nbsp;|&nbsp; <strong>Início:</strong> ' + (dados.data_inicio_atividade || '—') +
+        '<br><strong>CNAE principal:</strong> ' + (dados.cnae_descricao || '—') +
+        ' &nbsp;|&nbsp; <strong>Secundários:</strong> ' +
+        (dados.cnaes_secundarios || []).length;
+
+      if (simples === false) {
+        painel.innerHTML +=
+          '<br>⚠️ A empresa <strong>não consta como optante pelo Simples Nacional</strong> ' +
+          'na base da Receita. Confirme o regime antes de usar esta calculadora.';
+      }
+
+      status.textContent = '✅ Dados preenchidos automaticamente. Revise antes de salvar.';
+      status.style.color = 'var(--verde)';
+    } catch (err) {
+      status.textContent = '⚠️ ' + err.message +
+        ' Você pode preencher os campos manualmente.';
+      status.style.color = 'var(--vermelho)';
+    } finally {
+      btnBuscar.disabled = false;
+    }
+  }
+
+  btnBuscar.addEventListener('click', buscarCnpj);
+  campoCnpj.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      buscarCnpj();
+    }
+  });
+})();
+</script>
+{% endblock %}

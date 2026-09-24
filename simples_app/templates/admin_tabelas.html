@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block titulo %}Tabelas base · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Tabelas base</h1>
+    <p>Faixas, alíquotas nominais e valores a deduzir por anexo.</p>
+  </div>
+</div>
+
+<div class="flash aviso">
+  Atenção: alterar estas faixas muda o cálculo de todos os usuários imediatamente.
+  Alíquotas devem ser informadas em decimal (ex.: <strong>0.04</strong> = 4%).
+</div>
+
+<form method="post">
+  {% for a in anexos %}
+  <div class="card">
+    <h2>Anexo {{ a }}</h2>
+    <div class="tabela-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:70px">Faixa</th>
+            <th class="num">Limite inferior</th>
+            <th class="num">Limite superior</th>
+            <th class="num">Alíquota nominal (decimal)</th>
+            <th class="num">Valor a deduzir</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in tabelas[a] %}
+          <tr>
+            <td>
+              {{ f.faixa }}ª
+              <input type="hidden" name="id_{{ f.id }}" value="{{ f.id }}">
+            </td>
+            <td class="num"><input type="text" name="inf_{{ f.id }}" value="{{ f.limite_inferior }}" style="text-align:right"></td>
+            <td class="num"><input type="text" name="sup_{{ f.id }}" value="{{ f.limite_superior }}" style="text-align:right"></td>
+            <td class="num"><input type="text" name="aliq_{{ f.id }}" value="{{ f.aliquota_nominal }}" style="text-align:right"></td>
+            <td class="num"><input type="text" name="ded_{{ f.id }}" value="{{ f.valor_deduzir }}" style="text-align:right"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="acoes" style="margin-top:6px">
+    <button type="submit" class="btn">💾 Salvar tabelas</button>
+    <a class="btn secundario" href="{{ url_for('admin') }}">Voltar</a>
+  </div>
+</form>
+{% endblock %}

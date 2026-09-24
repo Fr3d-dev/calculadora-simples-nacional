@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Entrar · Calculadora Simples Nacional</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-card">
+      <h1>📊 Simples Nacional</h1>
+      <p class="sub">Calculadora de alíquota e DAS · {{ ANO_REFERENCIA }}</p>
+
+      {% with mensagens = get_flashed_messages(with_categories=true) %}
+        {% if mensagens %}
+          <div class="flashes">
+            {% for categoria, msg in mensagens %}
+              <div class="flash {{ categoria }}">{{ msg }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form method="post">
+        <div class="campo">
+          <label for="email">E-mail</label>
+          <input type="email" id="email" name="email" required autofocus
+                 placeholder="seu@email.com" autocomplete="username">
+        </div>
+        <div class="campo">
+          <label for="senha">Senha</label>
+          <input type="password" id="senha" name="senha" required
+                 placeholder="••••••••" autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn">Entrar</button>
+      </form>
+
+      <div class="dica">
+        <strong>Acesso inicial:</strong> admin@admin.com / admin123<br>
+        Troque a senha do administrador após o primeiro acesso.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

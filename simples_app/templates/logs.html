@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block titulo %}Logs · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Logs de auditoria</h1>
+    <p>Últimas 200 ações registradas no sistema.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:160px">Data/hora</th>
+          <th>Usuário</th>
+          <th>Ação</th>
+          <th>Detalhe</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in logs %}
+        <tr>
+          <td>{{ l.criado_em }}</td>
+          <td>{{ l.usuario_nome }}</td>
+          <td><span class="badge anexo">{{ l.acao }}</span></td>
+          <td>{{ l.detalhe or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" style="text-align:center;color:#64748b">Nenhum registro ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

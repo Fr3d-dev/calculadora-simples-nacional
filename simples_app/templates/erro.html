@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block titulo %}{{ codigo }} · Erro{% endblock %}
+
+{% block conteudo %}
+<div class="card" style="text-align:center;padding:50px">
+  <h1 style="font-size:44px;margin:0;color:#1d4ed8">{{ codigo }}</h1>
+  <p style="color:#64748b;font-size:15px">{{ mensagem }}</p>
+  <div class="acoes" style="justify-content:center">
+    <a class="btn" href="{{ url_for('dashboard') }}">Voltar ao dashboard</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block titulo %}{{ 'Novo usuário' if not usuario else 'Editar usuário' }} · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>{{ 'Novo usuário' if not usuario else 'Editar usuário' }}</h1>
+    <p>{{ 'Cadastre um novo acesso à calculadora.' if not usuario else 'Atualize dados, senha e permissões.' }}</p>
+  </div>
+</div>
+
+<div class="card" style="max-width:620px">
+  <form method="post">
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div>
+        <label for="nome">Nome</label>
+        <input type="text" id="nome" name="nome" required value="{{ usuario.nome if usuario else '' }}">
+      </div>
+      <div>
+        <label for="email">E-mail</label>
+        <input type="email" id="email" name="email" required value="{{ usuario.email if usuario else '' }}">
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label for="senha">Senha {{ '(deixe em branco para manter)' if usuario else '' }}</label>
+      <input type="password" id="senha" name="senha" {{ 'required' if not usuario else '' }}
+             placeholder="{{ '••••••••' if usuario else 'Mínimo 6 caracteres' }}">
+    </div>
+
+    <div style="margin-top:14px">
+      <label for="empresa_id">Empresa vinculada</label>
+      <select id="empresa_id" name="empresa_id">
+        <option value="">— nenhuma —</option>
+        {% for e in empresas %}
+        <option value="{{ e.id }}"
+          {{ 'selected' if usuario and usuario.empresa_id == e.id else '' }}>
+          {{ e.razao_social }}{% if e.cnae_principal %} · CNAE {{ e.cnae_principal }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <div class="texto-suave" style="margin-top:4px">
+        Define qual empresa aparece como ativa para este usuário.
+      </div>
+    </div>
+
+    <div class="acoes" style="margin-top:16px">
+      <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:500">
+        <input type="checkbox" name="ativo" style="width:auto" {{ 'checked' if (not usuario or usuario.ativo) }}>
+        Ativo
+      </label>
+      <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:500">
+        <input type="checkbox" name="is_admin" style="width:auto" {{ 'checked' if usuario and usuario.is_admin }}>
+        Administrador
+      </label>
+    </div>
+
+    <div class="acoes" style="margin-top:18px">
+      <button type="submit" class="btn">💾 Salvar</button>
+      <a class="btn secundario" href="{{ url_for('admin') }}">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

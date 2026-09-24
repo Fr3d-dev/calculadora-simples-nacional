@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block titulo %}Anexo {{ anexo }} · Calculadora Simples Nacional{% endblock %}
+
+{% block conteudo %}
+{% set faixas_num = {'I': 'Comércio', 'II': 'Indústria', 'III': 'Serviços', 'IV': 'Serviços (construção/limpeza/vigilância)', 'V': 'Serviços intelectuais (fator R)'} %}
+
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Anexo {{ anexo }} — {{ faixas_num.get(anexo, '') }}</h1>
+    <p>{{ alvo.nome }}{% if alvo.id != g.usuario.id %} · <em>em nome de {{ alvo.nome }}</em>{% endif %}</p>
+  </div>
+</div>
+
+<div class="abas">
+  {# Administrador vê todos os anexos; o usuário comum, só os identificados. #}
+  {% set abas = anexos_menu if anexo in anexos_menu else anexos_menu + [anexo] %}
+  {% for a in abas %}
+    <a href="{{ url_for('anexo_view', anexo=a, usuario_id=alvo.id) }}"
+       class="{{ 'ativo' if a == anexo }}">Anexo {{ a }}</a>
+  {% endfor %}
+</div>
+
+<form method="post" id="form-anexo" data-anexo="{{ anexo }}">
+  <div class="grid grid-2">
+
+    <!-- --------------------- Faturamento dos 12 meses (C3:C14) --------------------- -->
+    <div class="card">
+      <h2>Faturamento dos últimos 12 meses (RBT12)</h2>
+      <div class="tabela-scroll">
+        <table class="meses-tabela">
+          <thead>
+            <tr>
+              <th style="width:42%">Mês</th>
+              <th class="num">Faturamento (R$)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for mes in meses %}
+              <tr>
+                <td>{{ mes|capitalize }}</td>
+                <td class="num">
+                  <input type="text" inputmode="decimal" name="mes_{{ loop.index }}"
+                         value="{{ valores[loop.index0] }}" placeholder="0,00"
+                         class="campo-mes" data-indice="{{ loop.index }}">
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="nota">
+        A média é calculada como <strong>(12 × soma) ÷ quantidade de meses preenchidos</strong>,
+        igual à planilha (célula C15). Deixe em branco os meses sem movimento.
+      </p>
+    </div>
+
+    <!-- --------------------- Resultado --------------------- -->
+    <div>
+      <div class="card">
+        <h2>Faturamento do mês (F3)</h2>
+        <label for="faturamento_mes">Faturamento do mês a calcular (R$)</label>
+        <input type="text" inputmode="decimal" id="faturamento_mes" name="faturamento_mes"
+               value="{{ resultado.faturamento_mes and '%.2f'|format(resultado.faturamento_mes) or '' }}"
+               placeholder="0,00">
+        <p class="nota">Informe o faturamento do mês sobre o qual o DAS será calculado.</p>
+      </div>
+
+      <div class="card">
+        <h2>Resultado do cálculo</h2>
+        <div class="resultado-grid">
+          <div class="resultado-item">
+            <div class="rotulo">RBT12 (F2)</div>
+            <div class="valor" id="out-rbt12">{{ resultado.rbt12 | formatar_moeda }}</div>
+          </div>
+          <div class="resultado-item">
+            <div class="rotulo">Faixa</div>
+            <div class="valor" id="out-faixa">{{ resultado.faixa or '—' }}ª</div>
+          </div>
+          <div class="resultado-item">
+            <div class="rotulo">Alíquota nominal (F6)</div>
+            <div class="valor" id="out-aliquota-nominal">{{ resultado.aliquota_nominal | formatar_percentual }}</div>
+          </div>
+          <div class="resultado-item">
+            <div class="rotulo">Valor a deduzir (F9)</div>
+            <div class="valor" id="out-deduzir">{{ resultado.valor_deduzir | formatar_moeda }}</div>
+          </div>
+          <div class="resultado-item">
+            <div class="rotulo">Alíquota efetiva (J12)</div>
+            <div class="valor" id="out-aliquota-efetiva">{{ resultado.aliquota_efetiva | formatar_percentual }}</div>
+          </div>
+          <div class="resultado-item destaque">
+            <div class="rotulo">DAS a pagar (F15)</div>
+            <div class="valor" id="out-das">{{ resultado.das | formatar_moeda }}</div>
+          </div>
+        </div>
+        <p class="nota">
+          Alíquota efetiva = ((RBT12 × alíquota nominal) − valor a deduzir) ÷ RBT12.
+          DAS = faturamento do mês × alíquota efetiva.
+        </p>
+        <div class="acoes" style="margin-top:14px">
+          <button type="submit" class="btn">💾 Salvar dados</button>
+          {% if not is_admin %}
+            <a class="btn secundario" href="{{ url_for('dashboard') }}">Ver dashboard</a>
+          {% else %}
+            <a class="btn secundario" href="{{ url_for('dashboard', usuario_id=alvo.id) }}">Ver dashboard</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+
+<!-- --------------------- Tabela de faixas do anexo --------------------- -->
+<div class="card">
+  <h2>Tabela do Anexo {{ anexo }}</h2>
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Faixa</th>
+          <th class="num">De (R$)</th>
+          <th class="num">Até (R$)</th>
+          <th class="num">Alíquota nominal</th>
+          <th class="num">Valor a deduzir (R$)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in faixas %}
+          <tr {% if resultado.faixa == f.faixa %}style="background:#dcfce7;font-weight:600"{% endif %}>
+            <td>{{ f.faixa }}ª</td>
+            <td class="num">{{ f.limite_inferior | float | formatar_moeda }}</td>
+            <td class="num">{{ f.limite_superior | float | formatar_moeda }}</td>
+            <td class="num">{{ f.aliquota_nominal | float | formatar_percentual }}</td>
+            <td class="num">{{ f.valor_deduzir | float | formatar_moeda }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- --------------------- Repartição dos tributos --------------------- -->
+{% if resultado.reparticao %}
+<div class="card">
+  <h2>Repartição dos tributos — {{ resultado.faixa }}ª faixa do Anexo {{ anexo }}</h2>
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Tributo</th>
+          <th class="num">Percentual</th>
+          <th class="num">Valor sobre o DAS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tributo, perc in resultado.reparticao.items() %}
+          <tr>
+            <td>{{ tributo }}</td>
+            <td class="num" data-rep-perc="{{ perc }}">{{ perc | formatar_percentual }}</td>
+            <td class="num" data-rep-valor>{{ (resultado.das * perc) | formatar_moeda }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="nota">Valores informativos para conferência da guia DAS.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Tabela de faixas do anexo, embutida para permitir cálculo instantâneo no navegador.
+const FAIXAS = [
+  {% for f in faixas %}
+  { faixa: {{ f.faixa }}, inf: {{ f.limite_inferior | float }}, sup: {{ f.limite_superior | float }},
+    aliq: {{ f.aliquota_nominal | float }}, ded: {{ f.valor_deduzir | float }} }{{ "," if not loop.last }}
+  {% endfor %}
+];
+
+(function () {
+  const form = document.getElementById('form-anexo');
+  const anexo = form.dataset.anexo;
+  const camposMes = Array.from(document.querySelectorAll('.campo-mes'));
+  const campoFat = document.getElementById('faturamento_mes');
+  let timer = null;
+
+  function paraNumero(texto) {
+    if (!texto) return '';
+    texto = String(texto).trim();
+    if (texto === '') return '';
+    if (texto.includes(',') && texto.includes('.')) {
+      texto = texto.replace(/\./g, '').replace(',', '.');
+    } else if (texto.includes(',')) {
+      texto = texto.replace(',', '.');
+    }
+    const n = parseFloat(texto);
+    return isNaN(n) ? '' : n;
+  }
+
+  function recalcular() {
+    // Recalcula tudo no navegador, usando os campos atuais da tela.
+    // A tabela de faixas vem do servidor (embutida na página), então o
+    // enquadramento do RBT12 -> alíquota nominal + valor a deduzir -> J12 -> J13
+    // acontece imediatamente, sem depender de rede.
+    const valores = camposMes.map(c => paraNumero(c.value));
+    const faturamento = paraNumero(campoFat.value) || 0;
+
+    const preenchidos = valores.filter(v => v !== '' && v !== null && !isNaN(v));
+    const rbt12 = preenchidos.length ? (12 * preenchidos.reduce((a, b) => a + b, 0)) / preenchidos.length : 0;
+
+    // Localiza a faixa aplicável na tabela do anexo (dados embutidos na página).
+    let faixa = null;
+    for (const f of FAIXAS) {
+      if (rbt12 >= f.inf && rbt12 <= f.sup) { faixa = f; break; }
+    }
+
+    let aliqNominal = 0, deduzir = 0, aliqEfetiva = 0, das = 0;
+    if (faixa) {
+      aliqNominal = faixa.aliq;
+      deduzir = faixa.ded;
+      aliqEfetiva = rbt12 > 0 ? ((rbt12 * aliqNominal) - deduzir) / rbt12 : 0;
+      das = faturamento * aliqEfetiva;
+    }
+
+    trocarTexto('out-rbt12', formatarMoeda(rbt12));
+    trocarTexto('out-faixa', faixa ? faixa.faixa + 'ª' : '—');
+    trocarTexto('out-aliquota-nominal', formatarPercentual(aliqNominal));
+    trocarTexto('out-deduzir', formatarMoeda(deduzir));
+    trocarTexto('out-aliquota-efetiva', formatarPercentual(aliqEfetiva));
+    trocarTexto('out-das', formatarMoeda(das));
+
+    atualizarReparticao(aliqEfetiva, das);
+  }
+
+  function trocarTexto(id, texto) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = texto;
+  }
+
+  function formatarMoeda(v) {
+    if (isNaN(v)) v = 0;
+    const s = Math.abs(v).toFixed(2);
+    const [inteiro, dec] = s.split('.');
+    const comPonto = inteiro.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return (v < 0 ? '-R$ ' : 'R$ ') + comPonto + ',' + dec;
+  }
+
+  function formatarPercentual(v) {
+    if (isNaN(v)) v = 0;
+    return (v * 100).toFixed(2).replace('.', ',') + '%';
+  }
+
+  function atualizarReparticao(aliqEfetiva, das) {
+    // Atualiza os valores da repartição dos tributos, se a tabela existir.
+    const linhas = document.querySelectorAll('[data-rep-perc]');
+    linhas.forEach(td => {
+      const perc = parseFloat(td.dataset.repPerc);
+      const alvo = td.parentElement.querySelector('[data-rep-valor]');
+      if (alvo && !isNaN(perc)) alvo.textContent = formatarMoeda(das * perc);
+    });
+  }
+
+  function agendar() {
+    clearTimeout(timer);
+    timer = setTimeout(recalcular, 250);
+  }
+
+  camposMes.forEach(c => c.addEventListener('input', agendar));
+  campoFat.addEventListener('input', agendar);
+})();
+</script>
+{% endblock %}

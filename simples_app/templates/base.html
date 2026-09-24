@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block titulo %}Calculadora Simples Nacional{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="marca">
+      📊 Simples Nacional
+      <small>{{ ANO_REFERENCIA }}</small>
+    </div>
+    <nav>
+      <a href="{{ url_for('empresas') }}"
+         class="{{ 'ativo' if request.endpoint in ['empresas', 'empresa_nova', 'empresa_editar'] }}">Empresas</a>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Dashboard</a>
+      {# Anexos identificados: usuário comum vê só os da sua empresa (pode ser nenhum). #}
+      {% for a in anexos_menu %}
+        <a href="{{ url_for('anexo_view', anexo=a) }}"
+           class="{{ 'ativo' if request.endpoint == 'anexo_view' and request.view_args.anexo == a }}">Anexo {{ a }}</a>
+      {% endfor %}
+      {% if g.usuario and g.usuario.is_admin %}
+        <a href="{{ url_for('admin') }}" class="{{ 'ativo' if request.endpoint == 'admin' }}">Usuários</a>
+        <a href="{{ url_for('admin_tabelas') }}" class="{{ 'ativo' if request.endpoint == 'admin_tabelas' }}">Tabelas</a>
+        <a href="{{ url_for('admin_logs') }}" class="{{ 'ativo' if request.endpoint == 'admin_logs' }}">Logs</a>
+      {% endif %}
+    </nav>
+    <div class="espaco"></div>
+    {% if g.usuario %}
+      {% set ativa = empresa_ativa() %}
+      <div class="usuario">
+        {% if ativa %}
+          <strong>{{ ativa.nome_fantasia or ativa.razao_social }}</strong>
+          <span>
+            {% if ativa.anexo_confirmado %}
+              Anexo {{ ativa.anexo_confirmado }}
+            {% elif ativa.cnae_principal %}
+              CNAE {{ ativa.cnae_principal }}
+            {% endif %}
+          </span>
+        {% endif %}
+        <span>{{ g.usuario.nome }} · {{ g.usuario.email }}</span>
+        {% if g.usuario.is_admin %}<span class="badge admin">ADMIN</span>{% endif %}
+        · <a href="{{ url_for('logout') }}">Sair</a>
+      </div>
+    {% endif %}
+  </header>
+
+  <main class="container">
+    {% with mensagens = get_flashed_messages(with_categories=true) %}
+      {% if mensagens %}
+        <div class="flashes">
+          {% for categoria, msg in mensagens %}
+            <div class="flash {{ categoria }}">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block conteudo %}{% endblock %}
+  </main>
+
+  <div class="rodape">
+    {% set ativa = empresa_ativa() %}
+    {% if ativa %}
+      {{ ativa.razao_social }}{% if ativa.cnpj %} · CNPJ {{ ativa.cnpj }}{% endif %} ·
+    {% else %}
+      {{ SIMPLES_EMPRESA }} · CNPJ {{ CNPJ_EMPRESA }} ·
+    {% endif %}
+    Calculadora Simples Nacional {{ ANO_REFERENCIA }}
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
