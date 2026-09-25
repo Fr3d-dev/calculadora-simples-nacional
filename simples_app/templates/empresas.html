@@ -14,6 +14,44 @@
 
 {% set ativa = empresa_ativa() %}
 
+<!-- --------------------- Importar extrato do Simples (PDF) --------------------- -->
+<div class="card">
+  <h2>📄 Importar extrato do Simples Nacional</h2>
+  <p class="texto-suave" style="margin-top:0">
+    Envie o PDF <strong>"Extrato do Simples Nacional"</strong> (PGDAS-D). O sistema
+    identifica a empresa pelo CNPJ e preenche o faturamento (RBT12) nos anexos
+    correspondentes aos CNAEs dela — você não precisa escolher o anexo.
+  </p>
+
+  <div class="importar-extrato">
+    <div class="campo-arquivo">
+      <input type="file" id="extrato-pdf" accept="application/pdf,.pdf">
+      <button type="button" class="btn" id="btn-analisar-extrato">🔍 Ler extrato</button>
+    </div>
+  </div>
+
+  <div id="extrato-msg" class="extrato-msg" style="display:none"></div>
+
+  <div id="extrato-preview" style="display:none">
+    <div class="extrato-cabecalho" id="extrato-cabecalho"></div>
+    <div class="tabela-scroll">
+      <table class="tabela-extrato">
+        <thead>
+          <tr>
+            <th>Mês</th>
+            <th class="num">Faturamento (R$)</th>
+          </tr>
+        </thead>
+        <tbody id="extrato-corpo"></tbody>
+      </table>
+    </div>
+    <div class="acoes" style="margin-top:14px">
+      <button type="button" class="btn" id="btn-aplicar-extrato">💾 Importar para a empresa</button>
+      <button type="button" class="btn secundario" id="btn-cancelar-extrato">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="card">
   {% if empresas %}
   <div class="tabela-scroll">
@@ -104,4 +142,147 @@
     atividades secundárias, do faturamento e do fator R — confirme com seu contador.
   </p>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const inputPdf   = document.getElementById('extrato-pdf');
+  const btnLer     = document.getElementById('btn-analisar-extrato');
+  const caixaMsg   = document.getElementById('extrato-msg');
+  const preview    = document.getElementById('extrato-preview');
+  const cabecalho  = document.getElementById('extrato-cabecalho');
+  const corpo      = document.getElementById('extrato-corpo');
+  const btnAplicar = document.getElementById('btn-aplicar-extrato');
+  const btnCancel  = document.getElementById('btn-cancelar-extrato');
+
+  let extratoAtual = null;
+
+  function mostrarMsg(texto, tipo) {
+    caixaMsg.textContent = texto;
+    caixaMsg.className = 'extrato-msg ' + (tipo || 'info');
+    caixaMsg.style.display = 'block';
+  }
+
+  function formatarMoeda(v) {
+    return (Number(v) || 0).toLocaleString('pt-BR', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2
+    });
+  }
+
+  function limpar() {
+    extratoAtual = null;
+    preview.style.display = 'none';
+    corpo.innerHTML = '';
+    caixaMsg.style.display = 'none';
+  }
+
+  btnLer.addEventListener('click', function () {
+    const arquivo = inputPdf.files && inputPdf.files[0];
+    if (!arquivo) {
+      mostrarMsg('Selecione o arquivo PDF do extrato.', 'erro');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('extrato', arquivo);
+
+    btnLer.disabled = true;
+    btnLer.textContent = '⏳ Lendo…';
+    caixaMsg.style.display = 'none';
+
+    fetch('{{ url_for("api_extrato_analisar") }}', { method: 'POST', body: fd })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.j.ok) {
+          mostrarMsg(res.j.erro || 'Não foi possível ler o extrato.', 'erro');
+          preview.style.display = 'none';
+          return;
+        }
+        extratoAtual = res.j.extrato;
+        renderPreview(extratoAtual);
+      })
+      .catch(function () { mostrarMsg('Falha de comunicação com o servidor.', 'erro'); })
+      .finally(function () {
+        btnLer.disabled = false;
+        btnLer.textContent = '🔍 Ler extrato';
+      });
+  });
+
+  function renderPreview(dados) {
+    const partes = [];
+    if (dados.periodo_rotulo)  partes.push('PA ' + dados.periodo_rotulo);
+    if (dados.rpa != null)     partes.push('RPA: R$ ' + formatarMoeda(dados.rpa));
+    if (dados.rbt12 != null)   partes.push('RBT12: R$ ' + formatarMoeda(dados.rbt12));
+
+    const emp = dados.empresa || {};
+    let html = '';
+    html += '<div class="extrato-empresa">';
+    html += '<div><strong>' + (emp.razao_social || '(empresa)') + '</strong>' +
+            (emp.cnpj ? ' · CNPJ ' + emp.cnpj : '') +
+            (emp.cnae_principal ? ' · CNAE ' + emp.cnae_principal : '') + '</div>';
+
+    const anexos = dados.anexos || [];
+    if (anexos.length) {
+      const tags = anexos.map(function (a) {
+        return '<span class="badge anexo">Anexo ' + a.codigo +
+               (a.descricao ? ' · ' + a.descricao : '') + '</span>';
+      }).join(' ');
+      html += '<div class="extrato-anexos">Preencherei o RBT12 em: ' + tags + '</div>';
+    }
+    html += '</div>';
+    html += '<div class="extrato-dados">' + partes.join(' · ') + '</div>';
+
+    cabecalho.innerHTML = html;
+
+    corpo.innerHTML = '';
+    dados.meses.forEach(function (m) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + m.rotulo + '</td>' +
+                     '<td class="num">' + formatarMoeda(m.valor) + '</td>';
+      corpo.appendChild(tr);
+    });
+
+    preview.style.display = 'block';
+    mostrarMsg('Foram encontrados ' + dados.meses.length +
+               ' meses. Confira e confirme a importação.', 'ok');
+  }
+
+  btnAplicar.addEventListener('click', function () {
+    if (!extratoAtual) return;
+    const emp = extratoAtual.empresa || {};
+    btnAplicar.disabled = true;
+    btnAplicar.textContent = '⏳ Importando…';
+
+    fetch('{{ url_for("api_extrato_aplicar") }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        empresa_id: emp.id,
+        rbt12: extratoAtual.rbt12,
+        meses: extratoAtual.meses.map(function (m) { return { chave: m.chave, valor: m.valor }; })
+      })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.j.ok) {
+          mostrarMsg(res.j.erro || 'Erro ao importar.', 'erro');
+          return;
+        }
+        const lista = (res.j.anexos || []).map(function (a) {
+          return 'Anexo ' + a.anexo + ' (RBT12 ' + formatarMoeda(a.rbt12) + ', ' + a.meses + ' meses)';
+        }).join(', ');
+        limpar();
+        mostrarMsg('✅ Importado para ' + (res.j.empresa || 'a empresa') +
+                   ': ' + lista + '. Abra a calculadora para conferir.', 'ok');
+      })
+      .catch(function () { mostrarMsg('Falha de comunicação com o servidor.', 'erro'); })
+      .finally(function () {
+        btnAplicar.disabled = false;
+        btnAplicar.textContent = '💾 Importar para a empresa';
+      });
+  });
+
+  btnCancel.addEventListener('click', limpar);
+})();
+</script>
 {% endblock %}

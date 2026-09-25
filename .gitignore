@@ -15,6 +15,13 @@ env/
 # Banco de dados SQLite (dados do usuário)
 simples_app/instance/*.db
 
+# Documentos fiscais enviados pelo usuário (extratos, notas, planilhas)
+extrato/
+extratos/
+*.pdf
+*.xml
+*.xlsx
+
 # Backups manuais
 _backup/
 

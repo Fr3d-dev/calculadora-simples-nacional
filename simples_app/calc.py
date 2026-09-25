@@ -20,6 +20,7 @@ Fórmulas da planilha:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -99,10 +100,60 @@ REPARTICAO = {
     ],
 }
 
-MESES = [
-    "abril", "maio", "junho", "julho", "agosto", "setembro",
-    "outubro", "novembro", "dezembro", "janeiro", "fevereiro", "março",
+MESES_NOMES = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
 ]
+
+
+def meses_para_rbt12(data_ref=None) -> list[dict]:
+    """
+    Gera a lista dos últimos 12 meses fechando no mês anterior ao mês
+    da *data_ref* (padrão = data/hora atual do sistema).
+
+    Cada item:
+      {
+        "indice": 1..12,           # posição na lista (1 = mês mais antigo)
+        "mes": int 1..12,          # número do mês
+        "ano": int,                # ano
+        "rotulo": str,             # ex: "setembro/2025"
+        "mes_nome": str,           # ex: "setembro"
+        "chave": str,              # ex: "2025-09"
+      }
+
+    O mês *data_ref* é excluído porque o RBT12 considera os *últimos* 12 meses
+    completos (iguais à lógica do PGDAS-D).
+    """
+    from datetime import date
+
+    hoje = data_ref or date.today()
+
+    # Vamos para o mês anterior ao mês atual
+    if hoje.month == 1:
+        mes_base, ano_base = 12, hoje.year - 1
+    else:
+        mes_base, ano_base = hoje.month - 1, hoje.year
+
+    resultado = []
+    for i in range(12):
+        # i=0 -> 11 meses atrás; i=11 -> mês base
+        m = mes_base - 11 + i
+        ano_item = ano_base
+        if m < 1:
+            m += 12
+            ano_item -= 1
+        elif m > 12:
+            m -= 12
+            ano_item += 1
+        resultado.append({
+            "indice": i + 1,
+            "mes": m,
+            "ano": ano_item,
+            "mes_nome": MESES_NOMES[m - 1],
+            "rotulo": f"{MESES_NOMES[m - 1]}/{ano_item}",
+            "chave": f"{ano_item}-{m:02d}",
+        })
+    return resultado
 
 # ---------------------------------------------------------------------------
 # Repartição de impostos (células J17:Q25 da planilha)

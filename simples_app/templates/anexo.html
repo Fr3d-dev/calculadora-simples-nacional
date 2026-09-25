@@ -35,13 +35,13 @@
             </tr>
           </thead>
           <tbody>
-            {% for mes in meses %}
+            {% for m in meses_lista %}
               <tr>
-                <td>{{ mes|capitalize }}</td>
+                <td>{{ m.rotulo }}</td>
                 <td class="num">
-                  <input type="text" inputmode="decimal" name="mes_{{ loop.index }}"
-                         value="{{ valores[loop.index0] }}" placeholder="0,00"
-                         class="campo-mes" data-indice="{{ loop.index }}">
+                  <input type="text" inputmode="decimal" name="mes_{{ m.chave }}"
+                         value="{{ valores_ordenados[loop.index0] }}" placeholder="0,00"
+                         class="campo-mes" data-chave="{{ m.chave }}">
                 </td>
               </tr>
             {% endfor %}

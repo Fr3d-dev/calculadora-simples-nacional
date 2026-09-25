@@ -15,6 +15,8 @@
     <nav>
       <a href="{{ url_for('empresas') }}"
          class="{{ 'ativo' if request.endpoint in ['empresas', 'empresa_nova', 'empresa_editar'] }}">Empresas</a>
+      <a href="{{ url_for('importar_xml') }}"
+         class="{{ 'ativo' if request.endpoint == 'importar_xml' }}">Import XML</a>
       <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Dashboard</a>
       {# Anexos identificados: usuário comum vê só os da sua empresa (pode ser nenhum). #}
       {% for a in anexos_menu %}

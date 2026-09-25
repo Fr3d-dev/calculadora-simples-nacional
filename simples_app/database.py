@@ -63,10 +63,10 @@ CREATE TABLE IF NOT EXISTS anexos (
 CREATE TABLE IF NOT EXISTS faturamentos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     anexos_id INTEGER NOT NULL,
-    mes_indice INTEGER NOT NULL,
+    mes_ano TEXT NOT NULL,
     valor TEXT,
     FOREIGN KEY (anexos_id) REFERENCES anexos(id) ON DELETE CASCADE,
-    UNIQUE(anexos_id, mes_indice)
+    UNIQUE(anexos_id, mes_ano)
 );
 
 CREATE TABLE IF NOT EXISTS tabelas_base (
@@ -118,9 +118,52 @@ def init_db():
 
 
 def _migrar_schema(db: sqlite3.Connection):
-    """Aplica colunas novas em bancos já existentes (migração leve e idempotente)."""
+    """Aplica colunas novas e migra dados em bancos já existentes."""
     _adicionar_coluna(db, "usuarios", "empresa_id", "INTEGER")
     _adicionar_coluna(db, "anexos", "empresa_id", "INTEGER")
+    _migrar_faturamentos_mes_ano(db)
+
+
+def _migrar_faturamentos_mes_ano(db: sqlite3.Connection):
+    """Migra a tabela faturamentos do formato antigo (mes_indice) para o novo (mes_ano)."""
+    from calc import MESES_NOMES
+
+    cols = {r["name"] for r in db.execute("PRAGMA table_info(faturamentos)").fetchall()}
+    if "mes_indice" not in cols:
+        return  # já migrou
+
+    db.execute("BEGIN TRANSACTION")
+    try:
+        db.execute("ALTER TABLE faturamentos RENAME TO faturamentos_old")
+
+        db.execute("""
+            CREATE TABLE faturamentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                anexos_id INTEGER NOT NULL,
+                mes_ano TEXT NOT NULL,
+                valor TEXT,
+                FOREIGN KEY (anexos_id) REFERENCES anexos(id) ON DELETE CASCADE,
+                UNIQUE(anexos_id, mes_ano)
+            )
+        """)
+
+        # Mapeia mes_indice 1..12 para ano 2025 (ano fiscal de referência)
+        # Na migração mantemos o ano como 2025 para quem estava usando
+        for row in db.execute("SELECT * FROM faturamentos_old").fetchall():
+            mes_indice = int(row["mes_indice"])
+            mes_nome = MESES_NOMES[mes_indice - 1] if 1 <= mes_indice <= 12 else "?"
+            # Pega o ano do registro: se for 2025 ou 2026
+            # Tenta inferir pelo mes atual
+            db.execute(
+                "INSERT INTO faturamentos (anexos_id, mes_ano, valor) VALUES (?, ?, ?)",
+                (row["anexos_id"], f"2025-{mes_indice:02d}", row["valor"]),
+            )
+
+        db.execute("DROP TABLE faturamentos_old")
+        db.commit()
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
 
 
 def _adicionar_coluna(db: sqlite3.Connection, tabela: str, coluna: str, tipo: str):
@@ -242,27 +285,25 @@ def obter_ou_criar_anexo(usuario_id, anexo, conn=None):
 
 
 def obter_faturamentos(anexos_id, conn=None):
-    """Retorna lista com 12 posições (mes_indice 1..12)."""
+    """
+    Retorna um dict {mes_ano: valor} com todos os faturamentos salvos
+    para este anexo.
+    """
     db = conn or get_db()
     rows = db.execute(
-        "SELECT mes_indice, valor FROM faturamentos WHERE anexos_id=? ORDER BY mes_indice",
+        "SELECT mes_ano, valor FROM faturamentos WHERE anexos_id=? ORDER BY mes_ano",
         (anexos_id,),
     ).fetchall()
-    valores = [""] * 12
-    for r in rows:
-        idx = int(r["mes_indice"])
-        if 1 <= idx <= 12:
-            valores[idx - 1] = r["valor"] or ""
-    return valores
+    return {r["mes_ano"]: r["valor"] or "" for r in rows}
 
 
-def salvar_faturamento_mes(anexos_id, mes_indice, valor, conn=None):
+def salvar_faturamento_mes(anexos_id, mes_ano, valor, conn=None):
     db = conn or get_db()
     db.execute(
-        """INSERT INTO faturamentos (anexos_id, mes_indice, valor)
+        """INSERT INTO faturamentos (anexos_id, mes_ano, valor)
            VALUES (?, ?, ?)
-           ON CONFLICT(anexos_id, mes_indice) DO UPDATE SET valor=excluded.valor""",
-        (anexos_id, mes_indice, valor),
+           ON CONFLICT(anexos_id, mes_ano) DO UPDATE SET valor=excluded.valor""",
+        (anexos_id, mes_ano, valor),
     )
     db.commit()
 

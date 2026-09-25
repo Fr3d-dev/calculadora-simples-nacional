@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block titulo %}Import XML · Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Import XML</h1>
+    <p>
+      Envie os XMLs fiscais de <strong>saída</strong> (NF-e, NFC-e, NFS-e e CT-e).
+      O sistema soma o faturamento por mês e grava em cada competência — o mês
+      vira sozinho e o valor já passa a compor o RBT12.
+    </p>
+  </div>
+</div>
+
+{% if not empresa %}
+<div class="card">
+  <div class="extrato-msg erro" style="display:block">
+    Nenhuma empresa ativa. <a href="{{ url_for('empresas') }}">Cadastre ou selecione uma empresa</a>
+    com CNAE principal para liberar os anexos antes de importar os XMLs.
+  </div>
+</div>
+{% else %}
+
+<div class="card">
+  <h2>🧾 Importar XMLs de saída</h2>
+  <p class="texto-suave" style="margin-top:0">
+    Empresa ativa: <strong>{{ empresa.nome_fantasia or empresa.razao_social }}</strong>
+    {% if empresa.cnpj %}<span class="badge anexo">{{ empresa.cnpj }}</span>{% endif %}
+    — só entram notas cujo <strong>emitente</strong> seja esta empresa.
+  </p>
+
+  <div class="importar-extrato">
+    <div class="campo-arquivo">
+      <input type="file" id="xml-arquivos" accept=".xml,application/xml,text/xml,.zip,application/zip" multiple>
+      <button type="button" class="btn" id="btn-analisar-xml">🔍 Analisar XMLs</button>
+    </div>
+  </div>
+  <p class="texto-suave">
+    Aceita vários arquivos <code>.xml</code> de uma vez ou um <code>.zip</code> contendo os XMLs.
+  </p>
+
+  <div id="xml-msg" class="extrato-msg" style="display:none"></div>
+
+  <div id="xml-preview" style="display:none">
+    <div class="extrato-cabecalho" id="xml-cabecalho"></div>
+
+    <h3 style="margin:16px 0 6px">Faturamento por competência</h3>
+    <div class="tabela-scroll">
+      <table class="tabela-extrato">
+        <thead>
+          <tr>
+            <th>Mês</th>
+            <th class="num">Faturamento (R$)</th>
+          </tr>
+        </thead>
+        <tbody id="xml-corpo-meses"></tbody>
+      </table>
+    </div>
+
+    <h3 style="margin:16px 0 6px">Notas de saída encontradas</h3>
+    <div class="tabela-scroll" style="max-height:260px">
+      <table class="tabela-extrato">
+        <thead>
+          <tr>
+            <th>Competência</th>
+            <th>Tipo</th>
+            <th>Chave</th>
+            <th class="num">Valor (R$)</th>
+          </tr>
+        </thead>
+        <tbody id="xml-corpo-notas"></tbody>
+      </table>
+    </div>
+
+    <div id="xml-ignoradas-wrap" style="display:none">
+      <h3 style="margin:16px 0 6px">Arquivos ignorados</h3>
+      <ul id="xml-ignoradas" class="texto-suave"></ul>
+    </div>
+
+    <div class="acoes" style="margin-top:14px">
+      <button type="button" class="btn" id="btn-aplicar-xml">💾 Importar para a empresa</button>
+      <button type="button" class="btn secundario" id="btn-cancelar-xml">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const input    = document.getElementById('xml-arquivos');
+  const btnLer   = document.getElementById('btn-analisar-xml');
+  const msg      = document.getElementById('xml-msg');
+  const preview  = document.getElementById('xml-preview');
+  const cabecalho = document.getElementById('xml-cabecalho');
+  const corpoMes  = document.getElementById('xml-corpo-meses');
+  const corpoNts  = document.getElementById('xml-corpo-notas');
+  const ignWrap   = document.getElementById('xml-ignoradas-wrap');
+  const ignLista  = document.getElementById('xml-ignoradas');
+  const btnAplicar = document.getElementById('btn-aplicar-xml');
+  const btnCancelar = document.getElementById('btn-cancelar-xml');
+
+  const moeda = (v) => (v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  function mostrarMsg(texto, tipo) {
+    msg.textContent = texto;
+    msg.className = 'extrato-msg ' + (tipo || '');
+    msg.style.display = 'block';
+  }
+  function limparMsg() { msg.style.display = 'none'; }
+
+  function enviar(url, aoTerminar) {
+    const fd = new FormData();
+    for (const f of input.files) fd.append('xmls', f);
+    fetch(url, { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(aoTerminar)
+      .catch(err => mostrarMsg('Falha na comunicação: ' + err, 'erro'));
+  }
+
+  function montarPreview(dados) {
+    const meses = Object.keys(dados.por_mes || {});
+    cabecalho.innerHTML =
+      '<strong>' + (dados.empresa || '') + '</strong> — ' +
+      (dados.notas ? dados.notas.length : 0) + ' nota(s) de saída, ' +
+      meses.length + ' competência(s).';
+
+    corpoMes.innerHTML = '';
+    meses.forEach(m => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + m + '</td><td class="num">' + moeda(dados.por_mes[m]) + '</td>';
+      corpoMes.appendChild(tr);
+    });
+    const trTot = document.createElement('tr');
+    trTot.className = 'total';
+    trTot.innerHTML = '<td>Total</td><td class="num">' + moeda(dados.total) + '</td>';
+    corpoMes.appendChild(trTot);
+
+    corpoNts.innerHTML = '';
+    (dados.notas || []).forEach(n => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + n.competencia + '</td>' +
+        '<td>' + n.tipo + '</td>' +
+        '<td class="texto-suave">' + (n.chave || '—') + '</td>' +
+        '<td class="num">' + moeda(n.valor) + '</td>';
+      corpoNts.appendChild(tr);
+    });
+
+    const ign = dados.ignoradas || [];
+    if (ign.length) {
+      ignLista.innerHTML = '';
+      ign.forEach(i => {
+        const li = document.createElement('li');
+        li.textContent = i.nome + ' — ' + i.motivo;
+        ignLista.appendChild(li);
+      });
+      ignWrap.style.display = 'block';
+    } else {
+      ignWrap.style.display = 'none';
+    }
+
+    preview.style.display = 'block';
+  }
+
+  btnLer.addEventListener('click', () => {
+    if (!input.files || input.files.length === 0) {
+      mostrarMsg('Selecione ao menos um arquivo .xml ou .zip.', 'erro');
+      return;
+    }
+    limparMsg();
+    preview.style.display = 'none';
+    mostrarMsg('Lendo os XMLs…', '');
+    enviar('{{ url_for("api_xml_analisar") }}', (dados) => {
+      if (dados.erro) { mostrarMsg(dados.erro, 'erro'); return; }
+      limparMsg();
+      if (!dados.notas || dados.notas.length === 0) {
+        mostrarMsg('Nenhuma nota de saída encontrada.', 'aviso');
+      }
+      montarPreview(dados);
+    });
+  });
+
+  btnAplicar.addEventListener('click', () => {
+    limparMsg();
+    btnAplicar.disabled = true;
+    enviar('{{ url_for("api_xml_aplicar") }}', (dados) => {
+      btnAplicar.disabled = false;
+      if (dados.erro) { mostrarMsg(dados.erro, 'erro'); return; }
+      const anexos = (dados.anexos || []).map(a => 'Anexo ' + a.anexo).join(', ');
+      mostrarMsg(
+        'Importado com sucesso para ' + dados.empresa + ' (' + anexos + '). ' +
+        'Faturamento gravado por competência e RBT12 recalculado.',
+        'ok'
+      );
+      preview.style.display = 'none';
+    });
+  });
+
+  btnCancelar.addEventListener('click', () => {
+    preview.style.display = 'none';
+    limparMsg();
+    input.value = '';
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
