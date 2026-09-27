@@ -130,6 +130,16 @@ def admin_required(f):
     return wrapper
 
 
+def _chave_simulacao(anexo_id) -> str:
+    """Chave de sessão onde ficam os valores temporários do modo simulação.
+
+    Guardar na sessão (e não no banco) garante o isolamento: ao sair do modo
+    simulação, os dados reais permanecem intactos.
+    """
+    return f"simulacao_anexo_{anexo_id}"
+
+
+
 def _casar_empresa_extrato(dados_extrato: dict, empresas) -> Optional[object]:
     """
     Descobre a qual empresa cadastrada o extrato pertence.
@@ -376,9 +386,105 @@ def registrar_rotas(app: Flask):
 
         row = db.obter_ou_criar_anexo(alvo["id"], anexo)
 
+        # ------------------------------------------------------------------
+        # Modo SIMULAÇÃO: isolado. Nada aqui é gravado nos dados reais.
+        # Os valores ficam apenas na sessão do navegador, permitindo inclusive
+        # preencher meses à frente sem contaminar a base do extrato.
+        # ------------------------------------------------------------------
+        modo_simulacao = request.args.get("modo") == "simulacao" or \
+            request.form.get("_modo") == "simulacao"
+
+        if request.method == "POST" and request.form.get("_acao") == "sair_simulacao":
+            session.pop(_chave_simulacao(row["id"]), None)
+            flash("Simulação encerrada. Os dados reais não foram alterados.", "ok")
+            return redirect(url_for("anexo_view", anexo=anexo, usuario_id=id_alvo))
+
+        if modo_simulacao:
+            chave_sessao = _chave_simulacao(row["id"])
+            if request.method == "POST":
+                # Guarda os valores digitados somente na sessão (não no banco).
+                sim = session.get(chave_sessao, {})
+                for chave, valor in request.form.items():
+                    if chave.startswith("mes_"):
+                        mes_ano = chave.replace("mes_", "", 1)
+                        if mes_ano:
+                            sim[mes_ano] = valor.strip()
+                fat_sim = request.form.get("faturamento_mes")
+                if fat_sim is not None:
+                    sim["_faturamento_mes"] = fat_sim.strip()
+                session[chave_sessao] = sim
+                flash("Simulação atualizada (não gravada nos dados reais).", "ok")
+                return redirect(url_for(
+                    "anexo_view", anexo=anexo, usuario_id=id_alvo, modo="simulacao"))
+
+            sim = session.get(chave_sessao, {})
+            max_futuros = request.args.get("futuros", type=int)
+            max_futuros = max_futuros if max_futuros is not None else 6
+            max_futuros = max(0, min(max_futuros, 24))
+
+            valores_reais = db.obter_faturamentos(row["id"])
+
+            meses_reais = calc.meses_para_rbt12()
+            meses_extras = calc.meses_futuros(meses_reais, max_futuros)
+            meses_lista = meses_reais + meses_extras
+
+            # A janela de 12 meses "desliza" conforme o mês futuro preenchido:
+            # o último mês preenchido (real ou simulado) vira o fecho da janela.
+            valores_por_chave = {}
+            for m in meses_lista:
+                if m["chave"] in sim:
+                    valores_por_chave[m["chave"]] = sim[m["chave"]]
+                elif not m.get("futuro"):
+                    valores_por_chave[m["chave"]] = valores_reais.get(m["chave"], "")
+
+            ultimo_preenchido = None
+            for m in meses_lista:
+                v = valores_por_chave.get(m["chave"], "")
+                if str(v).strip() != "":
+                    ultimo_preenchido = m["chave"]
+
+            if ultimo_preenchido and ultimo_preenchido > meses_reais[-1]["chave"]:
+                # Usuário preencheu meses à frente: recalcula a janela de 12 meses
+                # terminando no mês futuro mais recente preenchido.
+                fim = calc.montar_mes(ultimo_preenchido)
+                chaves_janela = [calc.mes_deslocado(fim["chave"], -11 + i) for i in range(12)]
+                meses_lista = [calc.montar_mes(c) for c in chaves_janela]
+                valores_por_chave = {c: valores_por_chave.get(c, "") for c in chaves_janela}
+                meses_extras = []
+            else:
+                meses_lista = meses_reais
+                valores_por_chave = {m["chave"]: valores_por_chave.get(m["chave"], "")
+                                     for m in meses_lista}
+                meses_extras = calc.meses_futuros(meses_lista, max_futuros)
+
+            valores_ordenados = [valores_por_chave.get(m["chave"], "") for m in meses_lista]
+            meses_futuros_lista = [
+                {**m, "valor": valores_por_chave.get(m["chave"], "")}
+                for m in meses_extras
+            ]
+            rbt12 = calc.calcular_rbt12(valores_ordenados)
+            fat_mes = sim.get("_faturamento_mes", "")
+            resultado = calc.calcular(anexo, rbt12, fat_mes)
+            faixas = db.listar_tabelas_base(anexo)
+
+            return render_template(
+                "anexo.html",
+                anexo=anexo,
+                meses_lista=meses_lista,
+                valores_ordenados=valores_ordenados,
+                meses_futuros=meses_futuros_lista,
+                resultado=resultado,
+                faixas=faixas,
+                alvo=alvo,
+                modo_simulacao=True,
+                max_futuros=max_futuros,
+            )
+
         if request.method == "POST":
             try:
-                # Salva faturamentos por mes_ano (chave tipo "2025-01")
+                # Salva faturamentos por mes_ano (chave tipo "2025-01").
+                # A gravação SOBRESCREVE o valor do mês, então importar o extrato
+                # substitui o que foi digitado à mão (nunca soma).
                 for chave, valor in request.form.items():
                     if chave.startswith("mes_"):
                         mes_ano = chave.replace("mes_", "", 1)
@@ -410,9 +516,12 @@ def registrar_rotas(app: Flask):
             anexo=anexo,
             meses_lista=meses_lista,
             valores_ordenados=valores_ordenados,
+            meses_futuros=[],
             resultado=resultado,
             faixas=faixas,
             alvo=alvo,
+            modo_simulacao=False,
+            max_futuros=6,
         )
 
     # ----------------------- Cálculo dinâmico (AJAX) --------------------------

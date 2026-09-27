@@ -533,6 +533,41 @@ textarea { resize: vertical; }
 .tabela-extrato { width: 100%; }
 .tabela-extrato tr.total { font-weight: 700; background: #f1f5f9; }
 
+/* --------------------- Modo simulação (projeção de meses à frente) ------- */
+.banner-simulacao {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-left: 4px solid var(--azul);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.banner-simulacao strong { display: block; color: var(--azul); margin-bottom: 3px; }
+.banner-simulacao span { font-size: 13px; color: var(--texto-suave); }
+
+.titulo-secao {
+  font-size: 14px;
+  margin: 18px 0 8px;
+  color: var(--texto, #1e293b);
+  border-top: 1px dashed var(--cinza-borda);
+  padding-top: 14px;
+}
+.linha-futura { background: #f8fafc; }
+.campo-futuro { border-color: #c7d2fe !important; background: #fff; }
+.badge.futuro {
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 10.5px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+
 @media (max-width: 720px) {
   .linha-cnae { grid-template-columns: 1fr; }
   .tabela-quadro { overflow-x: auto; }

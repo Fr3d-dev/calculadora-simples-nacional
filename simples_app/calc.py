@@ -106,6 +106,50 @@ MESES_NOMES = [
 ]
 
 
+def mes_deslocado(chave: str, deslocamento: int) -> str:
+    """Desloca uma competência "YYYY-MM" em N meses e devolve "YYYY-MM".
+
+    ``deslocamento`` pode ser negativo (meses anteriores) ou positivo
+    (meses à frente) — usado no modo simulação.
+    """
+    ano, mes = (int(p) for p in chave.split("-"))
+    indice = (ano * 12 + (mes - 1)) + deslocamento
+    novo_ano, novo_mes = divmod(indice, 12)
+    return f"{novo_ano}-{novo_mes + 1:02d}"
+
+
+def montar_mes(chave: str, indice: int = None) -> dict:
+    """Monta o dicionário descritivo de um mês a partir da chave "YYYY-MM"."""
+    ano, mes = (int(p) for p in chave.split("-"))
+    item = {
+        "mes": mes,
+        "ano": ano,
+        "mes_nome": MESES_NOMES[mes - 1],
+        "rotulo": f"{MESES_NOMES[mes - 1]}/{ano}",
+        "chave": f"{ano}-{mes:02d}",
+    }
+    if indice is not None:
+        item["indice"] = indice
+    return item
+
+
+def meses_futuros(meses_lista: list, quantidade: int = 6) -> list:
+    """Gera os próximos N meses após o último mês de *meses_lista*.
+
+    Usada no modo simulação para permitir preencher competências à frente.
+    Marca cada item com ``futuro=True``.
+    """
+    if not meses_lista or quantidade <= 0:
+        return []
+    ultima = meses_lista[-1]["chave"]
+    futuros = []
+    for i in range(1, quantidade + 1):
+        item = montar_mes(mes_deslocado(ultima, i))
+        item["futuro"] = True
+        futuros.append(item)
+    return futuros
+
+
 def meses_para_rbt12(data_ref=None) -> list[dict]:
     """
     Gera a lista dos últimos 12 meses fechando no mês anterior ao mês

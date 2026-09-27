@@ -9,7 +9,29 @@
     <h1>Anexo {{ anexo }} — {{ faixas_num.get(anexo, '') }}</h1>
     <p>{{ alvo.nome }}{% if alvo.id != g.usuario.id %} · <em>em nome de {{ alvo.nome }}</em>{% endif %}</p>
   </div>
+  <div class="acoes">
+    {% if not modo_simulacao %}
+      <a class="btn secundario"
+         href="{{ url_for('anexo_view', anexo=anexo, usuario_id=alvo.id, modo='simulacao') }}">
+        🧪 Simulação
+      </a>
+    {% endif %}
+  </div>
 </div>
+
+{% if modo_simulacao %}
+<div class="banner-simulacao">
+  <div>
+    <strong>🧪 Modo simulação</strong>
+    <span>Você pode digitar qualquer mês — inclusive meses à frente — para projetar o
+    RBT12. Nada aqui é gravado: os dados reais importados do extrato permanecem intactos.</span>
+  </div>
+  <form method="post" style="margin:0">
+    <input type="hidden" name="_acao" value="sair_simulacao">
+    <button type="submit" class="btn secundario">Sair da simulação</button>
+  </form>
+</div>
+{% endif %}
 
 <div class="abas">
   {# Administrador vê todos os anexos; o usuário comum, só os identificados. #}
@@ -20,7 +42,8 @@
   {% endfor %}
 </div>
 
-<form method="post" id="form-anexo" data-anexo="{{ anexo }}">
+<form method="post" id="form-anexo" data-anexo="{{ anexo }}" data-modo="{{ 'simulacao' if modo_simulacao else 'real' }}">
+  {% if modo_simulacao %}<input type="hidden" name="_modo" value="simulacao">{% endif %}
   <div class="grid grid-2">
 
     <!-- --------------------- Faturamento dos 12 meses (C3:C14) --------------------- -->
@@ -48,9 +71,32 @@
           </tbody>
         </table>
       </div>
+      {% if modo_simulacao and meses_futuros %}
+        <h3 class="titulo-secao">Meses à frente (projeção)</h3>
+        <div class="tabela-scroll">
+          <table class="meses-tabela">
+            <tbody>
+              {% for m in meses_futuros %}
+                <tr class="linha-futura">
+                  <td>{{ m.rotulo }} <span class="badge futuro">futuro</span></td>
+                  <td class="num">
+                    <input type="text" inputmode="decimal" name="mes_{{ m.chave }}"
+                           value="{{ m.valor }}" placeholder="0,00"
+                           class="campo-mes campo-futuro" data-chave="{{ m.chave }}">
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
       <p class="nota">
         A média é calculada como <strong>(12 × soma) ÷ quantidade de meses preenchidos</strong>,
         igual à planilha (célula C15). Deixe em branco os meses sem movimento.
+        {% if modo_simulacao %}
+          Preencher um mês à frente <strong>desliza a janela</strong> de 12 meses para
+          fechar nele — é assim que você projeta o futuro.
+        {% endif %}
       </p>
     </div>
 
@@ -98,11 +144,17 @@
           DAS = faturamento do mês × alíquota efetiva.
         </p>
         <div class="acoes" style="margin-top:14px">
-          <button type="submit" class="btn">💾 Salvar dados</button>
-          {% if not is_admin %}
-            <a class="btn secundario" href="{{ url_for('dashboard') }}">Ver dashboard</a>
+          {% if modo_simulacao %}
+            <button type="submit" class="btn">🧪 Recalcular simulação</button>
+            <a class="btn secundario"
+               href="{{ url_for('anexo_view', anexo=anexo, usuario_id=alvo.id) }}">Voltar aos dados reais</a>
           {% else %}
-            <a class="btn secundario" href="{{ url_for('dashboard', usuario_id=alvo.id) }}">Ver dashboard</a>
+            <button type="submit" class="btn">💾 Salvar dados</button>
+            {% if not is_admin %}
+              <a class="btn secundario" href="{{ url_for('dashboard') }}">Ver dashboard</a>
+            {% else %}
+              <a class="btn secundario" href="{{ url_for('dashboard', usuario_id=alvo.id) }}">Ver dashboard</a>
+            {% endif %}
           {% endif %}
         </div>
       </div>
