@@ -150,6 +150,62 @@ def meses_futuros(meses_lista: list, quantidade: int = 6) -> list:
     return futuros
 
 
+def normalizar_competencia(texto) -> Optional[str]:
+    """
+    Aceita a competência em vários formatos e devolve "YYYY-MM" (ou None).
+
+    Formatos aceitos: "2026-08", "08/2026", "8/2026", "202608".
+    """
+    if texto is None:
+        return None
+    if isinstance(texto, (int, float)):
+        texto = str(int(texto))
+    texto = str(texto).strip()
+    if not texto:
+        return None
+
+    import re
+
+    # "YYYY-MM"
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})", texto)
+    if m:
+        ano, mes = int(m.group(1)), int(m.group(2))
+    else:
+        # "MM/YYYY"
+        m = re.fullmatch(r"(\d{1,2})/(\d{4})", texto)
+        if m:
+            mes, ano = int(m.group(1)), int(m.group(2))
+        else:
+            # "YYYYMM"
+            m = re.fullmatch(r"(\d{4})(\d{2})", texto)
+            if not m:
+                return None
+            ano, mes = int(m.group(1)), int(m.group(2))
+
+    if not (1 <= mes <= 12):
+        return None
+    return f"{ano}-{mes:02d}"
+
+
+def meses_para_competencia(competencia, data_ref=None) -> list:
+    """
+    Monta a janela de RBT12 (12 meses) que termina no mês ANTERIOR à
+    *competencia* informada — regra do PGDAS-D.
+
+    Ex.: competencia "2026-08" -> janela de ago/2025 até jul/2026.
+
+    Se *competencia* for None/inválida, cai no comportamento antigo
+    (``meses_para_rbt12``, fechando no mês anterior ao de hoje).
+    """
+    chave = normalizar_competencia(competencia)
+    if not chave:
+        return meses_para_rbt12(data_ref)
+
+    fim = mes_deslocado(chave, -1)  # mês anterior à competência
+    return [montar_mes(mes_deslocado(fim, -11 + i), indice=i + 1) for i in range(12)]
+
+
+
 def meses_para_rbt12(data_ref=None) -> list[dict]:
     """
     Gera a lista dos últimos 12 meses fechando no mês anterior ao mês
@@ -340,22 +396,45 @@ def _to_float(valor) -> float:
         return 0.0
 
 
-def calcular_rbt12(faturamentos: list) -> float:
+def calcular_rbt12(faturamentos: list, meses_em_atividade: int = 12) -> float:
     """
-    Reproduz a fórmula da planilha: C15 = (12*SUM(C3:C14))/COUNTA(C3:C14)
+    Calcula o RBT12 (Receita Bruta dos últimos 12 meses) conforme a
+    LC 123/2006, art. 18, §§ 2º e 3º (e Resolução CGSN 140/2018, art. 21).
 
-    COUNTA conta apenas as células preenchidas (não vazias). Aqui consideramos
-    "preenchida" qualquer valor diferente de None/"" — zero digitado conta.
+    Regra:
+      * Empresa com 12 meses ou mais de atividade: RBT12 = soma dos 12 meses
+        anteriores ao período de apuração (mês sem faturamento ENTRA como 0).
+      * Empresa em início de atividade (menos de 12 meses): RBT12 = média
+        aritmética dos meses em que a empresa existiu, proporcionalizada para
+        12 meses -> (12 * soma) / meses_em_atividade.
+
+    Importante: mês zerado conta como mês de atividade. O divisor é o número
+    de meses que a empresa efetivamente existiu dentro da janela
+    (`meses_em_atividade`), e NÃO o número de meses preenchidos pelo usuário.
+
+    Args:
+        faturamentos: lista dos faturamentos da janela (mais antigo -> mais
+            recente). Aceita float/int ou string em formato BR ("1.234,56").
+        meses_em_atividade: meses de existência da empresa dentro da janela
+            (1 a 12). Padrão 12.
+
+    Returns:
+        Valor do RBT12.
     """
-    valores_validos = []
+    total = 0.0
     for v in faturamentos:
         if v is None or (isinstance(v, str) and v.strip() == ""):
+            # Mês não informado: conta como faturamento zero.
             continue
-        valores_validos.append(_to_float(v))
+        total += _to_float(v)
 
-    if not valores_validos:
+    meses = meses_em_atividade if meses_em_atividade and meses_em_atividade > 0 else 12
+    if meses > 12:
+        meses = 12
+
+    if meses <= 0 or total == 0:
         return 0.0
-    return (12 * sum(valores_validos)) / len(valores_validos)
+    return (12 * total) / meses
 
 
 def obter_faixa(anexo: str, rbt12: float) -> Optional[tuple]:

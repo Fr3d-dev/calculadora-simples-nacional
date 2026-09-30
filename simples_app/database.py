@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS anexos (
     anexo TEXT NOT NULL,
     rbt12 TEXT,
     faturamento_mes TEXT,
+    competencia TEXT,
     atualizado_em TEXT NOT NULL,
     UNIQUE(usuario_id, anexo),
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
@@ -121,6 +122,7 @@ def _migrar_schema(db: sqlite3.Connection):
     """Aplica colunas novas e migra dados em bancos já existentes."""
     _adicionar_coluna(db, "usuarios", "empresa_id", "INTEGER")
     _adicionar_coluna(db, "anexos", "empresa_id", "INTEGER")
+    _adicionar_coluna(db, "anexos", "competencia", "TEXT")
     _migrar_faturamentos_mes_ano(db)
 
 
@@ -276,9 +278,9 @@ def obter_ou_criar_anexo(usuario_id, anexo, conn=None):
     if row:
         return row
     cur = db.execute(
-        """INSERT INTO anexos (usuario_id, anexo, rbt12, faturamento_mes, atualizado_em)
-           VALUES (?, ?, ?, ?, ?)""",
-        (usuario_id, anexo.upper(), "", "", datetime.now().isoformat(timespec="seconds")),
+        """INSERT INTO anexos (usuario_id, anexo, rbt12, faturamento_mes, competencia, atualizado_em)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (usuario_id, anexo.upper(), "", "", "", datetime.now().isoformat(timespec="seconds")),
     )
     db.commit()
     return db.execute("SELECT * FROM anexos WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -308,23 +310,23 @@ def salvar_faturamento_mes(anexos_id, mes_ano, valor, conn=None):
     db.commit()
 
 
-def salvar_dados_anexo(anexos_id, rbt12=None, faturamento_mes=None, conn=None):
+def salvar_dados_anexo(anexos_id, rbt12=None, faturamento_mes=None,
+                       competencia=None, conn=None):
     db = conn or get_db()
-    if rbt12 is not None and faturamento_mes is not None:
-        db.execute(
-            "UPDATE anexos SET rbt12=?, faturamento_mes=?, atualizado_em=? WHERE id=?",
-            (rbt12, faturamento_mes, datetime.now().isoformat(timespec="seconds"), anexos_id),
-        )
-    elif rbt12 is not None:
-        db.execute(
-            "UPDATE anexos SET rbt12=?, atualizado_em=? WHERE id=?",
-            (rbt12, datetime.now().isoformat(timespec="seconds"), anexos_id),
-        )
-    elif faturamento_mes is not None:
-        db.execute(
-            "UPDATE anexos SET faturamento_mes=?, atualizado_em=? WHERE id=?",
-            (faturamento_mes, datetime.now().isoformat(timespec="seconds"), anexos_id),
-        )
+    campos = []
+    valores = []
+    if rbt12 is not None:
+        campos.append("rbt12=?"), valores.append(rbt12)
+    if faturamento_mes is not None:
+        campos.append("faturamento_mes=?"), valores.append(faturamento_mes)
+    if competencia is not None:
+        campos.append("competencia=?"), valores.append(competencia)
+    if not campos:
+        return
+    campos.append("atualizado_em=?")
+    valores.append(datetime.now().isoformat(timespec="seconds"))
+    valores.append(anexos_id)
+    db.execute(f"UPDATE anexos SET {', '.join(campos)} WHERE id=?", valores)
     db.commit()
 
 

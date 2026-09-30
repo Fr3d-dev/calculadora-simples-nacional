@@ -103,12 +103,26 @@
     <!-- --------------------- Resultado --------------------- -->
     <div>
       <div class="card">
-        <h2>Faturamento do mês (F3)</h2>
+        <div class="linha-titulo">
+          <h2>Faturamento do mês (F3)</h2>
+          <div class="competencia-inline">
+            <label for="competencia">Competência</label>
+            <input type="month" id="competencia" name="competencia"
+                   value="{{ competencia or '' }}">
+          </div>
+        </div>
         <label for="faturamento_mes">Faturamento do mês a calcular (R$)</label>
         <input type="text" inputmode="decimal" id="faturamento_mes" name="faturamento_mes"
                value="{{ resultado.faturamento_mes and '%.2f'|format(resultado.faturamento_mes) or '' }}"
                placeholder="0,00">
-        <p class="nota">Informe o faturamento do mês sobre o qual o DAS será calculado.</p>
+        <p class="nota">
+          Informe a <strong>competência</strong> (mês/ano) e o faturamento do mês sobre
+          o qual o DAS será calculado. O RBT12 passa a considerar os
+          <strong>12 meses anteriores</strong> à competência.
+          {% if not competencia %}
+            Sem competência informada, a janela fecha no mês anterior ao atual.
+          {% endif %}
+        </p>
       </div>
 
       <div class="card">
@@ -320,6 +334,13 @@ const FAIXAS = [
 
   camposMes.forEach(c => c.addEventListener('input', agendar));
   campoFat.addEventListener('input', agendar);
+
+  // A competência reposiciona a janela do RBT12 no servidor, então ao
+  // alterá-la submetemos o formulário para remontar os 12 meses.
+  const campoCompetencia = document.getElementById('competencia');
+  if (campoCompetencia) {
+    campoCompetencia.addEventListener('change', () => form.submit());
+  }
 })();
 </script>
 {% endblock %}

@@ -356,6 +356,40 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge.anexo { background: var(--azul-claro); color: var(--azul); }
 
 .nota { font-size: 12.5px; color: var(--texto-suave); margin-top: 8px; }
+
+/* Título do card com o seletor de competência na mesma linha. */
+.linha-titulo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.linha-titulo h2 { margin: 0; font-size: 16px; }
+.competencia-inline { display: flex; align-items: center; gap: 8px; }
+.competencia-inline label {
+  font-weight: 700;
+  font-size: 13px;
+  margin: 0;
+  color: var(--azul);
+  letter-spacing: .2px;
+}
+.competencia-inline input[type="month"] {
+  max-width: 175px;
+  padding: 8px 10px;
+  border: 1px solid var(--azul);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--azul);
+  background: #fff;
+}
+.competencia-inline input[type="month"]:focus {
+  outline: 2px solid #93c5fd;
+  border-color: var(--azul);
+}
+
 .meses-tabela input { text-align: right; }
 .rodape { text-align: center; color: var(--texto-suave); font-size: 12px; padding: 18px 0; }
 

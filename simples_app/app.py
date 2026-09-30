@@ -5,6 +5,19 @@ Execução:
     python app.py
 Depois acesse http://127.0.0.1:5000
 
+Acesso de outra máquina na mesma rede (Wi-Fi/Ethernet):
+    Defina SN_HOST=0.0.0.0 antes de executar.
+        PowerShell:  $env:SN_HOST="0.0.0.0"; python app.py
+    Depois, na outra máquina, acesse pelo IP do PC que roda o app:
+        http://<IP-DO-PC>:5000        (ex.: http://192.168.0.10:5000)
+    Veja o IP com:  ipconfig  (procure "Endereço IPv4")
+    Observação: o Firewall do Windows precisa permitir a porta 5000.
+
+Variáveis de ambiente opcionais:
+    SN_HOST  -> interface de escuta (padrão: 127.0.0.1, só a própria máquina)
+    SN_PORT  -> porta (padrão: 5000)
+    SN_DEBUG -> "1" ativa o modo debug do Flask (nunca use em produção)
+
 Usuário administrador padrão criado no primeiro start:
     e-mail: admin@admin.com
     senha:  admin123
@@ -412,6 +425,9 @@ def registrar_rotas(app: Flask):
                 fat_sim = request.form.get("faturamento_mes")
                 if fat_sim is not None:
                     sim["_faturamento_mes"] = fat_sim.strip()
+                comp_sim = request.form.get("competencia")
+                if comp_sim is not None:
+                    sim["_competencia"] = comp_sim.strip()
                 session[chave_sessao] = sim
                 flash("Simulação atualizada (não gravada nos dados reais).", "ok")
                 return redirect(url_for(
@@ -424,7 +440,11 @@ def registrar_rotas(app: Flask):
 
             valores_reais = db.obter_faturamentos(row["id"])
 
-            meses_reais = calc.meses_para_rbt12()
+            # Competência informada (opcional): reposiciona a janela do RBT12
+            # para os 12 meses ANTERIORES a ela. Sem competência, mantém o
+            # comportamento antigo (janela fechando no mês anterior ao de hoje).
+            competencia_sim = sim.get("_competencia", "")
+            meses_reais = calc.meses_para_competencia(competencia_sim)
             meses_extras = calc.meses_futuros(meses_reais, max_futuros)
             meses_lista = meses_reais + meses_extras
 
@@ -478,6 +498,7 @@ def registrar_rotas(app: Flask):
                 alvo=alvo,
                 modo_simulacao=True,
                 max_futuros=max_futuros,
+                competencia=competencia_sim,
             )
 
         if request.method == "POST":
@@ -491,11 +512,13 @@ def registrar_rotas(app: Flask):
                         if mes_ano:
                             db.salvar_faturamento_mes(row["id"], mes_ano, valor.strip())
 
+                competencia = (request.form.get("competencia") or "").strip()
                 valores = db.obter_faturamentos(row["id"])
-                meses_lista = calc.meses_para_rbt12()
+                meses_lista = calc.meses_para_competencia(competencia)
                 rbt12 = calc.calcular_rbt12([valores.get(m["chave"], "") for m in meses_lista])
                 fat_mes = request.form.get("faturamento_mes", "").strip()
-                db.salvar_dados_anexo(row["id"], rbt12=f"{rbt12:.2f}", faturamento_mes=fat_mes)
+                db.salvar_dados_anexo(row["id"], rbt12=f"{rbt12:.2f}",
+                                      faturamento_mes=fat_mes, competencia=competencia)
                 db.registrar_log(usuario, "editar_anexo", f"Anexo {anexo} — {alvo['nome']}")
                 flash("Dados salvos com sucesso.", "ok")
             except Exception as exc:  # noqa: BLE001
@@ -503,7 +526,9 @@ def registrar_rotas(app: Flask):
             return redirect(url_for("anexo_view", anexo=anexo, usuario_id=id_alvo))
 
         valores = db.obter_faturamentos(row["id"])
-        meses_lista = calc.meses_para_rbt12()
+        competencia = row["competencia"] if "competencia" in row.keys() else ""
+        competencia = competencia or ""
+        meses_lista = calc.meses_para_competencia(competencia)
         # valores_ordenados: lista de 12 valores no mesmo order dos meses_lista
         valores_ordenados = [valores.get(m["chave"], "") for m in meses_lista]
         rbt12 = calc.calcular_rbt12(valores_ordenados)
@@ -522,6 +547,7 @@ def registrar_rotas(app: Flask):
             alvo=alvo,
             modo_simulacao=False,
             max_futuros=6,
+            competencia=competencia,
         )
 
     # ----------------------- Cálculo dinâmico (AJAX) --------------------------
@@ -1138,4 +1164,22 @@ if __name__ == "__main__":
     # Debug desligado por padrão. Para desenvolvimento, defina a variável de
     # ambiente SN_DEBUG=1 antes de executar (nunca use debug em produção).
     debug = os.environ.get("SN_DEBUG", "").strip() in ("1", "true", "True", "yes")
-    app.run(host="127.0.0.1", port=5000, debug=debug)
+
+    # Host/porta configuráveis por variável de ambiente.
+    # Padrão seguro: 127.0.0.1 (apenas a própria máquina).
+    # Para liberar o acesso de outra máquina da mesma rede, use SN_HOST=0.0.0.0.
+    host = os.environ.get("SN_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(os.environ.get("SN_PORT", "5000"))
+    except ValueError:
+        port = 5000
+
+    if host not in ("127.0.0.1", "localhost"):
+        print("=" * 60)
+        print("  ATENÇÃO: o app está acessível pela rede local.")
+        print("  - Qualquer máquina na mesma rede pode tentar acessar.")
+        print("  - Use senhas fortes e libere a porta só na rede confiável.")
+        print("  - Descubra o IP com: ipconfig (procure 'Endereço IPv4')")
+        print("=" * 60)
+
+    app.run(host=host, port=port, debug=debug)
