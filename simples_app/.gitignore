@@ -38,3 +38,6 @@ run_trace.py
 test_admin.py
 test_debug.py
 teste_*.py
+
+# Arquivos de teste temporários de templates
+templates/admin_test.html
