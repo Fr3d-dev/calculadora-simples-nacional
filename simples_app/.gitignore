@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Instance (banco de dados local)
+instance/
+!instance/simples.db
+
+# Backup
+_bak/
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários
+*.log
+*.tmp
+*.bak
+
+# Scripts de desenvolvimento/debug (não vão para produção)
+debug_test.py
+rodar_erro.py
+run_trace.py
+test_admin.py
+test_debug.py
+teste_*.py

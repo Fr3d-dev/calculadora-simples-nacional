@@ -20,12 +20,21 @@ Variáveis de ambiente opcionais:
 
 Usuário administrador padrão criado no primeiro start:
     e-mail: admin@admin.com
-    senha:  admin123
+    senha:  definida por SIMPLES_ADMIN_SENHA (ou gerada aleatoriamente
+            e impressa no log uma única vez).
+
+Variáveis de ambiente de produção:
+    SN_PRODUCAO        -> se definida, ativa modo produção (exige SIMPLES_SECRET)
+    SIMPLES_SECRET     -> chave secreta do Flask (obrigatória em produção)
+    SIMPLES_DB         -> caminho do banco SQLite (opcional)
+    SIMPLES_ADMIN_EMAIL-> e-mail do admin criado no primeiro start (opcional)
+    SIMPLES_ADMIN_SENHA-> senha do admin criado no primeiro start (opcional)
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 from functools import wraps
 from typing import Optional
 
@@ -33,6 +42,7 @@ from flask import (
     Flask, flash, g, jsonify, redirect, render_template,
     request, session, url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import calc
 import cnaes
@@ -61,12 +71,28 @@ CNPJ_EMPRESA = "00.000.000/0001-00"
 
 def create_app() -> Flask:
     app = Flask(__name__, instance_relative_config=True)
+    em_producao = bool(os.environ.get("SN_PRODUCAO"))
+    secret_key = os.environ.get("SIMPLES_SECRET")
+    if not secret_key:
+        if em_producao:
+            raise RuntimeError(
+                "Defina a variável de ambiente SIMPLES_SECRET com uma chave "
+                "aleatória antes de rodar em produção."
+            )
+        # Ambiente de desenvolvimento: usa chave fixa só para não perder sessões.
+        secret_key = "dev-apenas-nao-use-em-producao"
     app.config.update(
-        SECRET_KEY=os.environ.get("SIMPLES_SECRET", "troque-esta-chave-em-producao"),
-        DATABASE=os.path.join(APP_DIR, "instance", "simples.db"),
+        SECRET_KEY=secret_key,
+        DATABASE=os.environ.get(
+            "SIMPLES_DB", os.path.join(APP_DIR, "instance", "simples.db")
+        ),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=em_producao,
     )
+    # Atrás do proxy reverso do PythonAnywhere (HTTPS termina no proxy).
+    if em_producao:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     os.makedirs(os.path.join(APP_DIR, "instance"), exist_ok=True)
 
     app.teardown_appcontext(db.close_db)
@@ -1262,12 +1288,31 @@ def registrar_rotas(app: Flask):
 # ---------------------------------------------------------------------------
 
 def bootstrap():
-    """Garante o schema e o usuário administrador padrão."""
+    """Garante o schema e o usuário administrador padrão.
+
+    A senha do admin vem da variável de ambiente SIMPLES_ADMIN_SENHA.
+    Se não for definida, uma senha aleatória é gerada e impressa uma única
+    vez no log (troque-a depois de entrar).
+    """
     with app.app_context():
         db.init_db()
-        if not db.buscar_usuario_por_email("admin@admin.com"):
-            db.criar_usuario("Administrador", "admin@admin.com", "admin123", is_admin=True)
-            print("[setup] Usuário admin criado -> admin@admin.com / admin123")
+        email = os.environ.get("SIMPLES_ADMIN_EMAIL", "admin@admin.com").strip().lower()
+        if not db.buscar_usuario_por_email(email):
+            senha = os.environ.get("SIMPLES_ADMIN_SENHA", "").strip()
+            gerada = False
+            if not senha:
+                senha = secrets.token_urlsafe(12)
+                gerada = True
+            db.criar_usuario("Administrador", email, senha, is_admin=True)
+            if gerada:
+                print("=" * 60)
+                print("  [setup] Usuário admin criado.")
+                print(f"  E-mail: {email}")
+                print(f"  Senha  : {senha}")
+                print("  Guarde agora e troque a senha após o primeiro login.")
+                print("=" * 60)
+            else:
+                print(f"[setup] Usuário admin criado -> {email} (senha definida via ambiente)")
 
 
 app = create_app()
@@ -1278,6 +1323,9 @@ if __name__ == "__main__":
     # Debug desligado por padrão. Para desenvolvimento, defina a variável de
     # ambiente SN_DEBUG=1 antes de executar (nunca use debug em produção).
     debug = os.environ.get("SN_DEBUG", "").strip() in ("1", "true", "True", "yes")
+    if debug and os.environ.get("SN_PRODUCAO"):
+        print("[aviso] SN_DEBUG ignorado: SN_PRODUCAO está definido.")
+        debug = False
 
     # Host/porta configuráveis por variável de ambiente.
     # Padrão seguro: 127.0.0.1 (apenas a própria máquina).
