@@ -221,6 +221,14 @@
             (emp.cnpj ? ' · CNPJ ' + emp.cnpj : '') +
             (emp.cnae_principal ? ' · CNAE ' + emp.cnae_principal : '') + '</div>';
 
+    // Alerta se a empresa já possui dados importados anteriormente.
+    if (dados.ja_possui_dados) {
+      const listaAnexos = (dados.anexos_com_dados || []).join(', ');
+      html += '<div class="extrato-alerta" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin:10px 0;font-size:13.5px;color:#856404">⚠️ Esta empresa <strong>já possui dados</strong> ' +
+              'importados anteriormente nos anexos: ' + listaAnexos + '. ' +
+              'A importação substituirá os valores existentes.</div>';
+    }
+
     const anexos = dados.anexos || [];
     if (anexos.length) {
       const tags = anexos.map(function (a) {
@@ -243,12 +251,27 @@
     });
 
     preview.style.display = 'block';
-    mostrarMsg('Foram encontrados ' + dados.meses.length +
-               ' meses. Confira e confirme a importação.', 'ok');
+
+    if (dados.ja_possui_dados) {
+      mostrarMsg('⚠️ Esta empresa já teve dados importados. Ao confirmar, os valores atuais serão substituídos.', 'aviso');
+    } else {
+      mostrarMsg('Foram encontrados ' + dados.meses.length +
+                 ' meses. Confira e confirme a importação.', 'ok');
+    }
   }
 
   btnAplicar.addEventListener('click', function () {
     if (!extratoAtual) return;
+
+    // Se já existem dados, pergunta antes de sobrescrever.
+    if (extratoAtual.ja_possui_dados) {
+      if (!confirm('⚠️ Esta empresa já possui dados de faturamento importados anteriormente.\n\n' +
+                   'Ao continuar, os valores atuais serão SUBSTITUÍDOS pelos dados deste novo extrato.\n\n' +
+                   'Deseja realmente sobrescrever?')) {
+        return;
+      }
+    }
+
     const emp = extratoAtual.empresa || {};
     btnAplicar.disabled = true;
     btnAplicar.textContent = '⏳ Importando…';
@@ -271,9 +294,13 @@
         const lista = (res.j.anexos || []).map(function (a) {
           return 'Anexo ' + a.anexo + ' (RBT12 ' + formatarMoeda(a.rbt12) + ', ' + a.meses + ' meses)';
         }).join(', ');
+        var msg = '✅ Importado para ' + (res.j.empresa || 'a empresa') +
+                   ': ' + lista + '. Abra a calculadora para conferir.';
+        if (res.j.ja_possui_dados) {
+          msg += ' (dados anteriores substituídos)';
+        }
         limpar();
-        mostrarMsg('✅ Importado para ' + (res.j.empresa || 'a empresa') +
-                   ': ' + lista + '. Abra a calculadora para conferir.', 'ok');
+        mostrarMsg(msg, 'ok');
       })
       .catch(function () { mostrarMsg('Falha de comunicação com o servidor.', 'erro'); })
       .finally(function () {

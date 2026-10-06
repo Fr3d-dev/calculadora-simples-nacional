@@ -14,6 +14,14 @@ from datetime import datetime
 
 from flask import current_app, g
 
+
+def _row_get(row, key, default=None):
+    """Acesso seguro a sqlite3.Row — suporta dict-style .get() mesmo sem o método."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
 # ---------------------------------------------------------------------------
 # Conexão
 # ---------------------------------------------------------------------------
@@ -27,7 +35,10 @@ CREATE TABLE IF NOT EXISTS usuarios (
     sal TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0,
     ativo INTEGER NOT NULL DEFAULT 1,
-    criado_em TEXT NOT NULL
+    empresa_id INTEGER,
+    permissoes TEXT DEFAULT '{}',
+    criado_em TEXT NOT NULL,
+    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS empresas (
@@ -52,13 +63,15 @@ CREATE TABLE IF NOT EXISTS empresas (
 CREATE TABLE IF NOT EXISTS anexos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER NOT NULL,
+    empresa_id INTEGER,
     anexo TEXT NOT NULL,
     rbt12 TEXT,
     faturamento_mes TEXT,
     competencia TEXT,
     atualizado_em TEXT NOT NULL,
-    UNIQUE(usuario_id, anexo),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+    UNIQUE(empresa_id, anexo),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS faturamentos (
@@ -104,6 +117,21 @@ def get_db() -> sqlite3.Connection:
     return g.db
 
 
+def _limpar_objetos_anexos_old(conn: sqlite3.Connection) -> None:
+    """Remove triggers, views ou qualquer objeto que referencie anexos_old."""
+    try:
+        cur = conn.execute(
+            "SELECT type, name FROM sqlite_master WHERE sql LIKE '%anexos_old%'"
+        )
+        for row in cur.fetchall():
+            tipo, nome = row["type"], row["name"]
+            conn.execute(f"DROP {tipo} IF EXISTS \"{nome}\"")
+            print(f"  >>> Objeto removido: {tipo} {nome}")
+        conn.commit()
+    except Exception:
+        pass  # se der erro, ignora — o importante é tentar
+
+
 def close_db(exception=None):
     db = g.pop("db", None)
     if db is not None:
@@ -112,66 +140,18 @@ def close_db(exception=None):
 
 def init_db():
     db = get_db()
+    # Remove qualquer trigger/view que referencie a tabela anexos_old
+    # antes de executar o schema, evitando erro no primeiro acesso.
+    _limpar_objetos_anexos_old(db)
     db.executescript(SCHEMA)
-    _migrar_schema(db)
-    db.commit()
-    _seed_tabelas_base(db)
-
-
-def _migrar_schema(db: sqlite3.Connection):
-    """Aplica colunas novas e migra dados em bancos já existentes."""
-    _adicionar_coluna(db, "usuarios", "empresa_id", "INTEGER")
-    _adicionar_coluna(db, "anexos", "empresa_id", "INTEGER")
-    _adicionar_coluna(db, "anexos", "competencia", "TEXT")
-    _migrar_faturamentos_mes_ano(db)
-
-
-def _migrar_faturamentos_mes_ano(db: sqlite3.Connection):
-    """Migra a tabela faturamentos do formato antigo (mes_indice) para o novo (mes_ano)."""
-    from calc import MESES_NOMES
-
-    cols = {r["name"] for r in db.execute("PRAGMA table_info(faturamentos)").fetchall()}
-    if "mes_indice" not in cols:
-        return  # já migrou
-
-    db.execute("BEGIN TRANSACTION")
+    # Migração: adiciona coluna permissoes se não existir (bancos antigos)
     try:
-        db.execute("ALTER TABLE faturamentos RENAME TO faturamentos_old")
-
-        db.execute("""
-            CREATE TABLE faturamentos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                anexos_id INTEGER NOT NULL,
-                mes_ano TEXT NOT NULL,
-                valor TEXT,
-                FOREIGN KEY (anexos_id) REFERENCES anexos(id) ON DELETE CASCADE,
-                UNIQUE(anexos_id, mes_ano)
-            )
-        """)
-
-        # Mapeia mes_indice 1..12 para ano 2025 (ano fiscal de referência)
-        # Na migração mantemos o ano como 2025 para quem estava usando
-        for row in db.execute("SELECT * FROM faturamentos_old").fetchall():
-            mes_indice = int(row["mes_indice"])
-            mes_nome = MESES_NOMES[mes_indice - 1] if 1 <= mes_indice <= 12 else "?"
-            # Pega o ano do registro: se for 2025 ou 2026
-            # Tenta inferir pelo mes atual
-            db.execute(
-                "INSERT INTO faturamentos (anexos_id, mes_ano, valor) VALUES (?, ?, ?)",
-                (row["anexos_id"], f"2025-{mes_indice:02d}", row["valor"]),
-            )
-
-        db.execute("DROP TABLE faturamentos_old")
+        db.execute("ALTER TABLE usuarios ADD COLUMN permissoes TEXT DEFAULT '{}'")
         db.commit()
     except Exception:
-        db.execute("ROLLBACK")
-        raise
-
-
-def _adicionar_coluna(db: sqlite3.Connection, tabela: str, coluna: str, tipo: str):
-    cols = {r["name"] for r in db.execute(f"PRAGMA table_info({tabela})").fetchall()}
-    if coluna not in cols:
-        db.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+        pass  # coluna já existe
+    db.commit()
+    _seed_tabelas_base(db)
 
 
 def _seed_tabelas_base(db: sqlite3.Connection):
@@ -207,17 +187,91 @@ def verificar_senha(senha: str, senha_hash: str, sal: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Permissões (sistema granular baseado em JSON)
+# ---------------------------------------------------------------------------
+
+# Lista de todas as permissões disponíveis no sistema.
+PERMISSOES_DISPONIVEIS = {
+    "ver_dashboard": "Acessar o dashboard principal",
+    "ver_anexos": "Visualizar dados dos anexos",
+    "editar_anexos": "Editar/inserir faturamento nos anexos",
+    "simular_anexos": "Usar modo de simulação nos anexos",
+    "importar_xml": "Importar XML de notas fiscais",
+    "importar_extrato": "Importar extrato PGDAS-D (PDF)",
+    "gerenciar_empresas": "Cadastrar/editar/excluir empresas",
+    "gerenciar_usuarios": "Criar/editar/excluir usuários",
+    "ver_logs": "Visualizar logs de auditoria",
+    "editar_tabelas": "Editar tabelas de alíquotas e faixas",
+    "consultar_cnpj": "Consultar CNPJ na Receita Federal",
+}
+
+# Conjunto de permissões que o administrador tem por padrão (todas).
+PERMISSOES_ADMIN = set(PERMISSOES_DISPONIVEIS.keys())
+
+
+def get_permissoes(usuario) -> set:
+    """Retorna um set com as permissões do usuário.
+
+    Administradores sempre têm todas as permissões, independentemente do
+    campo `permissoes` no banco.
+    """
+    if not usuario:
+        return set()
+    if _row_get(usuario, "is_admin"):
+        return set(PERMISSOES_ADMIN)
+    raw = _row_get(usuario, "permissoes") or "{}"
+    if isinstance(raw, str):
+        try:
+            import json
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return set()
+    else:
+        data = raw
+    if isinstance(data, dict):
+        return {k for k, v in data.items() if v}
+    if isinstance(data, (list, tuple)):
+        return set(data)
+    return set()
+
+
+def tem_permissao(usuario, permissao: str) -> bool:
+    """Verifica se o usuário tem uma permissão específica."""
+    return permissao in get_permissoes(usuario)
+
+
+def salvar_permissoes(user_id: int, permissoes: set, conn=None):
+    """Salva um conjunto de permissões para o usuário (formato JSON dict)."""
+    db = conn or get_db()
+    data = {p: True for p in permissoes}
+    import json
+    db.execute(
+        "UPDATE usuarios SET permissoes=? WHERE id=?",
+        (json.dumps(data, ensure_ascii=False), user_id),
+    )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
 # Usuários
 # ---------------------------------------------------------------------------
 
-def criar_usuario(nome, email, senha, is_admin=False, ativo=True, conn=None):
+def criar_usuario(
+    nome, email, senha, *,
+    is_admin=False, ativo=True, permissoes=None, empresa_id=None, conn=None,
+):
     db = conn or get_db()
     senha_hash, sal = hash_senha(senha)
+    import json
+    permissoes_json = json.dumps(permissoes or {}, ensure_ascii=False)
     cur = db.execute(
-        """INSERT INTO usuarios (nome, email, senha_hash, sal, is_admin, ativo, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO usuarios (nome, email, senha_hash, sal, is_admin, ativo,
+                                 empresa_id, permissoes, criado_em)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (nome.strip(), email.strip().lower(), senha_hash, sal,
-         1 if is_admin else 0, 1 if ativo else 0, datetime.now().isoformat(timespec="seconds")),
+         1 if is_admin else 0, 1 if ativo else 0,
+         empresa_id, permissoes_json,
+         datetime.now().isoformat(timespec="seconds")),
     )
     db.commit()
     return cur.lastrowid
@@ -237,24 +291,38 @@ def buscar_usuario_por_id(user_id, conn=None):
 
 def listar_usuarios(conn=None):
     db = conn or get_db()
-    return db.execute("SELECT * FROM usuarios ORDER BY nome").fetchall()
+    return db.execute(
+        "SELECT * FROM usuarios ORDER BY is_admin DESC, nome"
+    ).fetchall()
 
 
-def atualizar_usuario(user_id, nome, email, senha=None, is_admin=False, ativo=True, conn=None):
+def atualizar_usuario(
+    user_id, nome, email, *,
+    senha=None, is_admin=False, ativo=True, permissoes=None, empresa_id=None, conn=None,
+):
     db = conn or get_db()
+    import json
+    permissoes_json = json.dumps(permissoes or {}, ensure_ascii=False)
+
     if senha:
         senha_hash, sal = hash_senha(senha)
         db.execute(
-            """UPDATE usuarios SET nome=?, email=?, senha_hash=?, sal=?,
-               is_admin=?, ativo=? WHERE id=?""",
+            """UPDATE usuarios
+               SET nome=?, email=?, senha_hash=?, sal=?,
+                   is_admin=?, ativo=?, empresa_id=?, permissoes=?
+               WHERE id=?""",
             (nome.strip(), email.strip().lower(), senha_hash, sal,
-             1 if is_admin else 0, 1 if ativo else 0, user_id),
+             1 if is_admin else 0, 1 if ativo else 0,
+             empresa_id, permissoes_json, user_id),
         )
     else:
         db.execute(
-            "UPDATE usuarios SET nome=?, email=?, is_admin=?, ativo=? WHERE id=?",
+            """UPDATE usuarios
+               SET nome=?, email=?, is_admin=?, ativo=?, empresa_id=?, permissoes=?
+               WHERE id=?""",
             (nome.strip(), email.strip().lower(),
-             1 if is_admin else 0, 1 if ativo else 0, user_id),
+             1 if is_admin else 0, 1 if ativo else 0,
+             empresa_id, permissoes_json, user_id),
         )
     db.commit()
 
@@ -269,18 +337,24 @@ def excluir_usuario(user_id, conn=None):
 # Anexos e faturamentos
 # ---------------------------------------------------------------------------
 
-def obter_ou_criar_anexo(usuario_id, anexo, conn=None):
+def obter_ou_criar_anexo(usuario_id, anexo, conn=None, empresa_id=None):
     db = conn or get_db()
-    row = db.execute(
-        "SELECT * FROM anexos WHERE usuario_id=? AND anexo=?",
-        (usuario_id, anexo.upper()),
-    ).fetchone()
+    if empresa_id:
+        row = db.execute(
+            "SELECT * FROM anexos WHERE empresa_id=? AND anexo=?",
+            (empresa_id, anexo.upper()),
+        ).fetchone()
+    else:
+        row = db.execute(
+            "SELECT * FROM anexos WHERE usuario_id=? AND anexo=? AND empresa_id IS NULL",
+            (usuario_id, anexo.upper()),
+        ).fetchone()
     if row:
         return row
     cur = db.execute(
-        """INSERT INTO anexos (usuario_id, anexo, rbt12, faturamento_mes, competencia, atualizado_em)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (usuario_id, anexo.upper(), "", "", "", datetime.now().isoformat(timespec="seconds")),
+        """INSERT INTO anexos (usuario_id, empresa_id, anexo, rbt12, faturamento_mes, competencia, atualizado_em)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (usuario_id, empresa_id, anexo.upper(), "", "", "", datetime.now().isoformat(timespec="seconds")),
     )
     db.commit()
     return db.execute("SELECT * FROM anexos WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -333,6 +407,21 @@ def salvar_dados_anexo(anexos_id, rbt12=None, faturamento_mes=None,
 # ---------------------------------------------------------------------------
 # Tabelas base (administração)
 # ---------------------------------------------------------------------------
+
+def verificar_anexos_com_dados(empresa_id, conn=None):
+    """Verifica se a empresa já possui faturamento importado em algum anexo.
+
+    Retorna uma lista de anexos (ex: ['I', 'III']) que já têm dados.
+    """
+    db = conn or get_db()
+    linhas = db.execute(
+        """SELECT DISTINCT a.anexo FROM anexos a
+           INNER JOIN faturamentos f ON f.anexos_id = a.id
+           WHERE a.empresa_id = ?""",
+        (empresa_id,),
+    ).fetchall()
+    return [r["anexo"] for r in linhas]
+
 
 def listar_tabelas_base(anexo=None, conn=None):
     db = conn or get_db()

@@ -42,7 +42,7 @@ import extrato_simples
 import xml_import
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-ANEXOS_VALIDOS = ["I", "II", "III", "IV"]
+ANEXOS_VALIDOS = ["I", "II", "III", "IV", "V"]
 # Todos os anexos possíveis do Simples Nacional (inclusive o V).
 ANEXOS_TODOS = ["I", "II", "III", "IV", "V"]
 # Rótulos dos anexos (para exibição).
@@ -91,6 +91,7 @@ def create_app() -> Flask:
         """Deixa o usuário logado (e o flag is_admin) disponível em todo template."""
         usuario = g.get("usuario")
         admin = bool(usuario and usuario["is_admin"])
+        user_perms = db.get_permissoes(usuario) if usuario else set()
 
         # Menu: administrador enxerga todos os anexos; o usuário comum enxerga
         # apenas os anexos identificados no cadastro da sua empresa.
@@ -103,6 +104,8 @@ def create_app() -> Flask:
             "usuario_logado": usuario,
             "is_admin": admin,
             "anexos_menu": anexos_menu,
+            "permissoes": user_perms,
+            "tem_permissao": lambda p: p in user_perms,
         }
 
     return app
@@ -141,6 +144,33 @@ def admin_required(f):
             return redirect(url_for("dashboard"))
         return f(*args, **kwargs)
     return wrapper
+
+
+def permissao_required(*permissoes):
+    """Decorator que exige UMA das permissões informadas para acessar a rota.
+
+    Uso:
+        @app.route("/rota")
+        @permissao_required("gerenciar_empresas", "importar_xml")
+        def minha_rota():
+            ...
+
+    Se o usuário não tiver nenhuma das permissões, é redirecionado ao dashboard
+    com uma mensagem de erro. Administradores sempre passam.
+    """
+    def decorator(f):
+        @wraps(f)
+        @login_required
+        def wrapper(*args, **kwargs):
+            if g.usuario["is_admin"]:
+                return f(*args, **kwargs)
+            user_perms = db.get_permissoes(g.usuario)
+            if not any(p in user_perms for p in permissoes):
+                flash("Você não tem permissão para acessar esta funcionalidade.", "erro")
+                return redirect(url_for("dashboard"))
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def _chave_simulacao(anexo_id) -> str:
@@ -347,7 +377,8 @@ def registrar_rotas(app: Flask):
             anexos_dashboard = []
 
         for anexo in anexos_dashboard:
-            row = db.obter_ou_criar_anexo(alvo["id"], anexo)
+            emp = empresa_ativa()
+            row = db.obter_ou_criar_anexo(alvo["id"], anexo, empresa_id=emp["id"] if emp else None)
             valores = db.obter_faturamentos(row["id"])
             meses_lista = calc.meses_para_rbt12()
             rbt12 = calc.calcular_rbt12([valores.get(m["chave"], "") for m in meses_lista])
@@ -397,7 +428,8 @@ def registrar_rotas(app: Flask):
             flash("Este anexo não está identificado no cadastro da sua empresa.", "aviso")
             return redirect(url_for("dashboard"))
 
-        row = db.obter_ou_criar_anexo(alvo["id"], anexo)
+        emp = empresa_ativa()
+        row = db.obter_ou_criar_anexo(alvo["id"], anexo, empresa_id=emp["id"] if emp else None)
 
         # ------------------------------------------------------------------
         # Modo SIMULAÇÃO: isolado. Nada aqui é gravado nos dados reais.
@@ -584,12 +616,20 @@ def registrar_rotas(app: Flask):
     # ---------------------- Administração: usuários --------------------------
 
     @app.route("/admin")
-    @admin_required
+    @permissao_required("gerenciar_usuarios")
     def admin():
-        return render_template("admin.html", usuarios=db.listar_usuarios())
+        """Painel de gerenciamento de usuários (listagem)."""
+        try:
+            usuarios = db.listar_usuarios()
+            empresas = db.listar_empresas()
+            return render_template("admin.html", usuarios=usuarios, empresas=empresas)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise e
 
     @app.route("/admin/usuario/novo", methods=["GET", "POST"])
-    @admin_required
+    @permissao_required("gerenciar_usuarios")
     def admin_usuario_novo():
         if request.method == "POST":
             nome = request.form.get("nome", "").strip()
@@ -597,63 +637,122 @@ def registrar_rotas(app: Flask):
             senha = request.form.get("senha", "")
             is_admin = request.form.get("is_admin") == "on"
             ativo = request.form.get("ativo") == "on"
-            if not nome or not email or not senha:
-                flash("Nome, e-mail e senha são obrigatórios.", "erro")
-            elif db.buscar_usuario_por_email(email):
-                flash("Já existe um usuário com este e-mail.", "erro")
+            empresa_id = request.form.get("empresa_id", type=int) or None
+
+            permissoes = {}
+            for p in db.PERMISSOES_DISPONIVEIS:
+                if request.form.get(f"perm_{p}") == "on":
+                    permissoes[p] = True
+
+            erros = []
+            if not nome:
+                erros.append("O nome é obrigatório.")
+            if not email:
+                erros.append("O e-mail é obrigatório.")
+            if not senha:
+                erros.append("A senha é obrigatória.")
+            elif len(senha) < 6:
+                erros.append("A senha deve ter no mínimo 6 caracteres.")
+            if db.buscar_usuario_por_email(email):
+                erros.append("Já existe um usuário com este e-mail.")
+
+            if erros:
+                for e in erros:
+                    flash(e, "erro")
             else:
-                novo_id = db.criar_usuario(nome, email, senha, is_admin=is_admin, ativo=ativo)
-                empresa_id = request.form.get("empresa_id", type=int)
-                if empresa_id:
-                    db.definir_empresa_usuario(novo_id, empresa_id)
+                novo_id = db.criar_usuario(
+                    nome, email, senha,
+                    is_admin=is_admin, ativo=ativo,
+                    permissoes=permissoes, empresa_id=empresa_id,
+                )
                 db.registrar_log(g.usuario, "criar_usuario", f"{nome} <{email}>")
-                flash("Usuário cadastrado com sucesso.", "ok")
+                flash(f"Usuário {nome} cadastrado com sucesso.", "ok")
                 return redirect(url_for("admin"))
-        return render_template("usuario_form.html", usuario=None, empresas=db.listar_empresas())
+
+        return render_template(
+            "usuario_form.html",
+            usuario=None,
+            empresas=db.listar_empresas(),
+            permissoes=db.PERMISSOES_DISPONIVEIS,
+            get_permissoes=db.get_permissoes,
+        )
 
     @app.route("/admin/usuario/<int:user_id>/editar", methods=["GET", "POST"])
-    @admin_required
+    @permissao_required("gerenciar_usuarios")
     def admin_usuario_editar(user_id):
         usuario = db.buscar_usuario_por_id(user_id)
         if not usuario:
             flash("Usuário não encontrado.", "erro")
             return redirect(url_for("admin"))
+
         if request.method == "POST":
             nome = request.form.get("nome", "").strip()
             email = request.form.get("email", "").strip()
             senha = request.form.get("senha", "")
             is_admin = request.form.get("is_admin") == "on"
             ativo = request.form.get("ativo") == "on"
+            empresa_id = request.form.get("empresa_id", type=int) or None
+
+            permissoes = {}
+            for p in db.PERMISSOES_DISPONIVEIS:
+                if request.form.get(f"perm_{p}") == "on":
+                    permissoes[p] = True
+
+            erros = []
+            if not nome:
+                erros.append("O nome é obrigatório.")
+            if not email:
+                erros.append("O e-mail é obrigatório.")
+            if senha and len(senha) < 6:
+                erros.append("A senha deve ter no mínimo 6 caracteres.")
+
             existente = db.buscar_usuario_por_email(email)
-            if not nome or not email:
-                flash("Nome e e-mail são obrigatórios.", "erro")
-            elif existente and existente["id"] != user_id:
-                flash("Já existe outro usuário com este e-mail.", "erro")
+            if existente and existente["id"] != user_id:
+                erros.append("Já existe outro usuário com este e-mail.")
+
+            if erros:
+                for e in erros:
+                    flash(e, "erro")
             else:
-                db.atualizar_usuario(user_id, nome, email, senha=senha or None,
-                                     is_admin=is_admin, ativo=ativo)
-                empresa_id = request.form.get("empresa_id", type=int)
-                db.definir_empresa_usuario(user_id, empresa_id)
+                db.atualizar_usuario(
+                    user_id, nome, email,
+                    senha=senha or None,
+                    is_admin=is_admin, ativo=ativo,
+                    permissoes=permissoes, empresa_id=empresa_id,
+                )
                 db.registrar_log(g.usuario, "editar_usuario", f"{nome} <{email}>")
-                flash("Usuário atualizado.", "ok")
+                flash(f"Usuário {nome} atualizado.", "ok")
                 return redirect(url_for("admin"))
-        return render_template("usuario_form.html", usuario=usuario, empresas=db.listar_empresas())
+
+        return render_template(
+            "usuario_form.html",
+            usuario=usuario,
+            empresas=db.listar_empresas(),
+            permissoes=db.PERMISSOES_DISPONIVEIS,
+            get_permissoes=db.get_permissoes,
+        )
 
     @app.route("/admin/usuario/<int:user_id>/excluir", methods=["POST"])
-    @admin_required
+    @permissao_required("gerenciar_usuarios")
     def admin_usuario_excluir(user_id):
         if user_id == g.usuario["id"]:
             flash("Você não pode excluir o próprio usuário.", "erro")
             return redirect(url_for("admin"))
+
         alvo = db.buscar_usuario_por_id(user_id)
+        if not alvo:
+            flash("Usuário não encontrado.", "erro")
+            return redirect(url_for("admin"))
+
         db.excluir_usuario(user_id)
-        db.registrar_log(g.usuario, "excluir_usuario", alvo["email"] if alvo else str(user_id))
-        flash("Usuário excluído.", "ok")
+        db.registrar_log(g.usuario, "excluir_usuario", f"{alvo['nome']} <{alvo['email']}>")
+        flash(f"Usuário {alvo['nome']} excluído.", "ok")
         return redirect(url_for("admin"))
 
     # ---------------------------- Empresas -----------------------------------
 
     @app.route("/empresas")
+    @permissao_required("gerenciar_empresas")
     @login_required
     def empresas():
         usuario = g.usuario
@@ -666,6 +765,7 @@ def registrar_rotas(app: Flask):
     # ------------------- Importação de XMLs fiscais (saídas) ------------------
 
     @app.route("/importar-xml")
+    @permissao_required("importar_xml")
     @login_required
     def importar_xml():
         """Página para enviar XMLs de saída (NF-e/NFC-e/NFS-e/CT-e) e apurar o mês."""
@@ -673,6 +773,7 @@ def registrar_rotas(app: Flask):
         return render_template("importar_xml.html", empresa=empresa)
 
     @app.route("/api/xml/analisar", methods=["POST"])
+    @permissao_required("importar_xml")
     @login_required
     def api_xml_analisar():
         """
@@ -696,6 +797,7 @@ def registrar_rotas(app: Flask):
         return jsonify(resultado)
 
     @app.route("/api/xml/aplicar", methods=["POST"])
+    @permissao_required("importar_xml")
     @login_required
     def api_xml_aplicar():
         """
@@ -732,7 +834,7 @@ def registrar_rotas(app: Flask):
         resumo = []
         try:
             for anexo in anexos:
-                row = db.obter_ou_criar_anexo(g.usuario["id"], anexo)
+                row = db.obter_ou_criar_anexo(g.usuario["id"], anexo, empresa_id=empresa["id"])
                 valores = db.obter_faturamentos(row["id"])
                 for mes_ano, valor in por_mes.items():
                     valores[mes_ano] = f"{valor:.2f}"
@@ -766,6 +868,7 @@ def registrar_rotas(app: Flask):
         })
 
     @app.route("/api/extrato/analisar", methods=["POST"])
+    @permissao_required("importar_extrato")
     @login_required
     def api_extrato_analisar():
         """
@@ -818,12 +921,18 @@ def registrar_rotas(app: Flask):
         }
         dados["anexos"] = [{"codigo": a, "descricao": ANEXO_NOMES.get(a, "")} for a in anexos]
 
-        # Se o extrexto pertence a uma empresa que não é a "ativa", avisa mas permite.
+        # Verifica se a empresa já possui faturamento importado anteriormente.
+        anexos_com_dados = db.verificar_anexos_com_dados(empresa["id"])
+        dados["ja_possui_dados"] = bool(anexos_com_dados)
+        dados["anexos_com_dados"] = anexos_com_dados
+
+        # Se o extrato pertence a uma empresa que não é a "ativa", avisa mas permite.
         ativa = empresa_ativa()
         dados["empresa_e_ativa"] = bool(ativa and ativa["id"] == empresa["id"])
         return jsonify({"ok": True, "extrato": dados})
 
     @app.route("/api/extrato/aplicar", methods=["POST"])
+    @permissao_required("importar_extrato")
     @login_required
     def api_extrato_aplicar():
         """
@@ -855,6 +964,10 @@ def registrar_rotas(app: Flask):
                         "cadastro da empresa antes de importar."
             }), 400
 
+        # Verifica se já existe faturamento importado para esta empresa.
+        anexos_com_dados = db.verificar_anexos_com_dados(empresa["id"])
+        ja_tem_dados = bool(anexos_com_dados)
+
         # RBT12 lido diretamente do extrato (fonte oficial). Se o PDF não trouxer,
         # cai no cálculo a partir dos 12 meses salvos no banco de cada anexo.
         rbt12_extrato = dados.get("rbt12")
@@ -866,7 +979,7 @@ def registrar_rotas(app: Flask):
         try:
             resumo = []
             for anexo in anexos:
-                row = db.obter_ou_criar_anexo(empresa["usuario_id"], anexo)
+                row = db.obter_ou_criar_anexo(empresa["usuario_id"], anexo, empresa_id=empresa["id"])
                 total = 0
                 for item in meses:
                     chave = str(item.get("chave") or "").strip()
@@ -895,10 +1008,12 @@ def registrar_rotas(app: Flask):
 
         return jsonify(
             {"ok": True, "empresa": empresa["razao_social"], "anexos": resumo,
-             "rbt12_extrato": round(rbt12_extrato, 2) if rbt12_extrato is not None else None}
+             "rbt12_extrato": round(rbt12_extrato, 2) if rbt12_extrato is not None else None,
+             "ja_possui_dados": ja_tem_dados}
         )
 
     @app.route("/empresa/nova", methods=["GET", "POST"])
+    @permissao_required("gerenciar_empresas")
     @login_required
     def empresa_nova():
         if request.method == "POST":
@@ -962,6 +1077,7 @@ def registrar_rotas(app: Flask):
         )
 
     @app.route("/empresa/<int:empresa_id>/excluir", methods=["POST"])
+    @permissao_required("gerenciar_empresas")
     @login_required
     def empresa_excluir(empresa_id):
         empresa = db.buscar_empresa_por_id(empresa_id)
@@ -1059,6 +1175,7 @@ def registrar_rotas(app: Flask):
     # ------------------- CNPJ: consulta na Receita (AJAX) --------------------
 
     @app.route("/api/cnpj/<cnpj>")
+    @permissao_required("consultar_cnpj")
     @login_required
     def api_consulta_cnpj(cnpj):
         try:
@@ -1100,6 +1217,7 @@ def registrar_rotas(app: Flask):
     # ---------------------- Administração: tabelas base -----------------------
 
     @app.route("/admin/tabelas", methods=["GET", "POST"])
+    @permissao_required("editar_tabelas")
     @admin_required
     def admin_tabelas():
         if request.method == "POST":
@@ -1126,6 +1244,7 @@ def registrar_rotas(app: Flask):
     # ------------------------------ Logs -------------------------------------
 
     @app.route("/admin/logs")
+    @permissao_required("ver_logs")
     @admin_required
     def admin_logs():
         return render_template("logs.html", logs=db.listar_logs(200))
@@ -1136,11 +1255,6 @@ def registrar_rotas(app: Flask):
     def nao_encontrado(e):
         return render_template("erro.html", codigo=404,
                                mensagem="Página não encontrada."), 404
-
-    @app.errorhandler(500)
-    def erro_interno(e):
-        return render_template("erro.html", codigo=500,
-                               mensagem="Erro interno do servidor."), 500
 
 
 # ---------------------------------------------------------------------------

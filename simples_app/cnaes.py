@@ -361,6 +361,20 @@ GRUPOS_CNAE = [
         "prioridade": 55,
         "observacao": "Reparação/manutenção e beleza -> Anexo III (pode ir ao V pelo fator R).",
     },
+    {
+        "descricao": "Serviços de escritório, apoio administrativo e gestão",
+        "prefixos": ("82",),
+        "palavras": ("escritorio", "escritório", "administrativo", "apoio administrativo",
+                     "secretaria", "secretariado", "copiadora", "reprografia",
+                     "fotocopia", "fotocópia", "impressao", "impressão",
+                     "digitalizacao", "digitalização", "arquivo", "protocolo",
+                     "cobranca", "cobrança", "cadastro", "telemarketing",
+                     "call center", "pesquisa de mercado", "agenciamento de"),
+        "anexo": "III",
+        "prioridade": 55,
+        "observacao": "Serviços de escritório e apoio administrativo -> Anexo III. "
+                      "Atividades intelectuais específicas podem ir ao V pelo fator R.",
+    },
 ]
 
 

@@ -13,20 +13,32 @@
       <small>{{ ANO_REFERENCIA }}</small>
     </div>
     <nav>
+      {% if is_admin or tem_permissao('gerenciar_empresas') %}
       <a href="{{ url_for('empresas') }}"
          class="{{ 'ativo' if request.endpoint in ['empresas', 'empresa_nova', 'empresa_editar'] }}">Empresas</a>
+      {% endif %}
+      {% if is_admin or tem_permissao('importar_xml') %}
       <a href="{{ url_for('importar_xml') }}"
          class="{{ 'ativo' if request.endpoint == 'importar_xml' }}">Import XML</a>
+      {% endif %}
       <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Dashboard</a>
       {# Anexos identificados: usuário comum vê só os da sua empresa (pode ser nenhum). #}
       {% for a in anexos_menu %}
         <a href="{{ url_for('anexo_view', anexo=a) }}"
            class="{{ 'ativo' if request.endpoint == 'anexo_view' and request.view_args.anexo == a }}">Anexo {{ a }}</a>
       {% endfor %}
-      {% if g.usuario and g.usuario.is_admin %}
+      {% if is_admin %}
         <a href="{{ url_for('admin') }}" class="{{ 'ativo' if request.endpoint == 'admin' }}">Usuários</a>
         <a href="{{ url_for('admin_tabelas') }}" class="{{ 'ativo' if request.endpoint == 'admin_tabelas' }}">Tabelas</a>
         <a href="{{ url_for('admin_logs') }}" class="{{ 'ativo' if request.endpoint == 'admin_logs' }}">Logs</a>
+      {% elif tem_permissao('gerenciar_usuarios') %}
+        <a href="{{ url_for('admin') }}" class="{{ 'ativo' if request.endpoint == 'admin' }}">Usuários</a>
+      {% endif %}
+      {% if tem_permissao('ver_logs') and not is_admin %}
+        <a href="{{ url_for('admin_logs') }}" class="{{ 'ativo' if request.endpoint == 'admin_logs' }}">Logs</a>
+      {% endif %}
+      {% if tem_permissao('editar_tabelas') and not is_admin %}
+        <a href="{{ url_for('admin_tabelas') }}" class="{{ 'ativo' if request.endpoint == 'admin_tabelas' }}">Tabelas</a>
       {% endif %}
     </nav>
     <div class="espaco"></div>

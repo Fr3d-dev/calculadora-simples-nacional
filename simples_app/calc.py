@@ -61,6 +61,14 @@ FAIXAS = {
         (1800000.01, 3600000.0, 0.220, 183780.0),
         (3600000.01, 4800000.0, 0.330, 828000.0),
     ],
+    "V": [
+        (0.0, 180000.0, 0.155, 0.0),
+        (180000.01, 360000.0, 0.180, 4500.0),
+        (360000.01, 720000.0, 0.195, 9900.0),
+        (720000.01, 1800000.0, 0.205, 17100.0),
+        (1800000.01, 3600000.0, 0.230, 62100.0),
+        (3600000.01, 4800000.0, 0.305, 540000.0),
+    ],
 }
 
 # Percentual de repartição dos tributos por anexo e faixa (parte informativa).
@@ -97,6 +105,14 @@ REPARTICAO = {
         {"IRPJ": 0.178, "CSLL": 0.192, "Cofins": 0.189, "PIS/Pasep": 0.041, "ISS": 0.40},
         {"IRPJ": 0.188, "CSLL": 0.192, "Cofins": 0.1808, "PIS/Pasep": 0.0392, "ISS": 0.40},
         {"IRPJ": 0.535, "CSLL": 0.215, "Cofins": 0.2055, "PIS/Pasep": 0.0445, "ISS": 0.0},
+    ],
+    "V": [
+        {"IRPJ": 0.25, "CSLL": 0.15, "Cofins": 0.141, "PIS/Pasep": 0.0305, "CPP": 0.2885, "ISS": 0.14},
+        {"IRPJ": 0.23, "CSLL": 0.15, "Cofins": 0.141, "PIS/Pasep": 0.0305, "CPP": 0.2785, "ISS": 0.17},
+        {"IRPJ": 0.24, "CSLL": 0.15, "Cofins": 0.1492, "PIS/Pasep": 0.0323, "CPP": 0.2385, "ISS": 0.19},
+        {"IRPJ": 0.21, "CSLL": 0.15, "Cofins": 0.1574, "PIS/Pasep": 0.0341, "CPP": 0.2385, "ISS": 0.21},
+        {"IRPJ": 0.23, "CSLL": 0.125, "Cofins": 0.141, "PIS/Pasep": 0.0305, "CPP": 0.2385, "ISS": 0.235},
+        {"IRPJ": 0.35, "CSLL": 0.155, "Cofins": 0.1644, "PIS/Pasep": 0.0356, "CPP": 0.295, "ISS": 0.0},
     ],
 }
 
@@ -288,6 +304,8 @@ def _tributos_do_anexo(anexo: str) -> list:
         return ["IRPJ", "CSLL", "Cofins", "PIS/Pasep", "CPP", "ISS"]
     if anexo == "IV":
         return ["IRPJ", "CSLL", "Cofins", "PIS/Pasep", "ISS"]
+    if anexo == "V":
+        return ["IRPJ", "CSLL", "Cofins", "PIS/Pasep", "CPP", "ISS"]
     return []
 
 

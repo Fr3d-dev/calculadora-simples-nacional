@@ -11,42 +11,79 @@
 </div>
 
 <div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>Nome</th>
-        <th>E-mail</th>
-        <th>Perfil</th>
-        <th>Status</th>
-        <th>Criado em</th>
-        <th class="num">Ações</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for u in usuarios %}
-      <tr>
-        <td>{{ u.nome }}</td>
-        <td>{{ u.email }}</td>
-        <td>{% if u.is_admin %}<span class="badge admin">Administrador</span>{% else %}Usuário{% endif %}</td>
-        <td>
-          {% if u.ativo %}<span class="badge ativo">Ativo</span>
-          {% else %}<span class="badge inativo">Inativo</span>{% endif %}
-        </td>
-        <td>{{ u.criado_em }}</td>
-        <td class="num">
-          <div class="acoes" style="justify-content:flex-end">
-            <a class="btn secundario pequeno" href="{{ url_for('admin_usuario_editar', user_id=u.id) }}">Editar</a>
-            {% if u.id != g.usuario.id %}
-            <form method="post" action="{{ url_for('admin_usuario_excluir', user_id=u.id) }}"
-                  onsubmit="return confirm('Excluir o usuário {{ u.nome }} e todos os seus dados?');">
-              <button type="submit" class="btn perigo pequeno">Excluir</button>
-            </form>
+  <div class="tabela-responsiva">
+    <table>
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>E-mail</th>
+          <th>Perfil</th>
+          <th>Empresa</th>
+          <th>Status</th>
+          <th>Criado em</th>
+          <th class="num" style="min-width:140px">Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in usuarios %}
+        <tr>
+          <td>
+            <strong>{{ u.nome }}</strong>
+            {% if u.id == g.usuario.id %}
+              <span class="badge" style="background:#e3f2fd;color:#1565c0;font-size:0.7em">você</span>
             {% endif %}
-          </div>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </td>
+          <td><code>{{ u.email }}</code></td>
+          <td>
+            {% if u.is_admin %}
+              <span class="badge admin">Administrador</span>
+            {% else %}
+              <span class="badge" style="background:#f3f4f6;color:#4b5563">Usuário</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if u.empresa_id %}
+              {% for e in empresas %}
+                {% if e.id == u.empresa_id %}
+                  {{ e.razao_social }}
+                {% endif %}
+              {% endfor %}
+            {% else %}
+              <span class="texto-suave">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if u.ativo %}
+              <span class="badge ativo">Ativo</span>
+            {% else %}
+              <span class="badge inativo">Inativo</span>
+            {% endif %}
+          </td>
+          <td class="texto-suave" style="font-size:0.85em">{{ u.criado_em[:10] if u.criado_em else '—' }}</td>
+          <td class="num">
+            <div class="acoes" style="justify-content:flex-end;gap:4px">
+              <a class="btn secundario pequeno" href="{{ url_for('admin_usuario_editar', user_id=u.id) }}">
+                ✏️ Editar
+              </a>
+              {% if u.id != g.usuario.id %}
+              <form method="post" action="{{ url_for('admin_usuario_excluir', user_id=u.id) }}"
+                    onsubmit="return confirm('Excluir o usuário {{ u.nome|e }} e todos os seus dados?\n\nEsta ação não pode ser desfeita.');"
+                    style="display:inline">
+                <button type="submit" class="btn perigo pequeno">🗑️ Excluir</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="texto-suave" style="text-align:center;padding:32px">
+            Nenhum usuário cadastrado ainda.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

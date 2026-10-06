@@ -9,56 +9,109 @@
   </div>
 </div>
 
-<div class="card" style="max-width:620px">
+<div class="card" style="max-width:720px">
   <form method="post">
-    <div class="grid" style="grid-template-columns:1fr 1fr">
+    <!-- === Dados básicos === -->
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
       <div>
-        <label for="nome">Nome</label>
-        <input type="text" id="nome" name="nome" required value="{{ usuario.nome if usuario else '' }}">
+        <label for="nome">Nome <span style="color:#dc2626">*</span></label>
+        <input type="text" id="nome" name="nome" required
+               value="{{ usuario.nome if usuario else '' }}"
+               placeholder="Nome completo">
       </div>
       <div>
-        <label for="email">E-mail</label>
-        <input type="email" id="email" name="email" required value="{{ usuario.email if usuario else '' }}">
+        <label for="email">E-mail <span style="color:#dc2626">*</span></label>
+        <input type="email" id="email" name="email" required
+               value="{{ usuario.email if usuario else '' }}"
+               placeholder="usuario@exemplo.com">
       </div>
     </div>
 
     <div style="margin-top:14px">
-      <label for="senha">Senha {{ '(deixe em branco para manter)' if usuario else '' }}</label>
-      <input type="password" id="senha" name="senha" {{ 'required' if not usuario else '' }}
-             placeholder="{{ '••••••••' if usuario else 'Mínimo 6 caracteres' }}">
+      <label for="senha">
+        Senha {{ '(deixe em branco para manter a atual)' if usuario else '' }}
+        <span style="color:#dc2626">{{ '*' if not usuario else '' }}</span>
+      </label>
+      <input type="password" id="senha" name="senha"
+             {{ 'required' if not usuario else '' }}
+             minlength="{{ '6' if not usuario else '' }}"
+             placeholder="{{ 'Mínimo 6 caracteres' if not usuario else '•••••••• (deixe vazio para não alterar)' }}">
     </div>
 
-    <div style="margin-top:14px">
+    <!-- === Empresa vinculada === -->
+    <div style="margin-top:16px">
       <label for="empresa_id">Empresa vinculada</label>
       <select id="empresa_id" name="empresa_id">
-        <option value="">— nenhuma —</option>
+        <option value="">— Nenhuma —</option>
         {% for e in empresas %}
         <option value="{{ e.id }}"
           {{ 'selected' if usuario and usuario.empresa_id == e.id else '' }}>
-          {{ e.razao_social }}{% if e.cnae_principal %} · CNAE {{ e.cnae_principal }}{% endif %}
+          {{ e.razao_social }}{% if e.cnpj %} · {{ e.cnpj }}{% endif %}
         </option>
         {% endfor %}
       </select>
-      <div class="texto-suave" style="margin-top:4px">
-        Define qual empresa aparece como ativa para este usuário.
+      <div class="texto-suave" style="margin-top:4px;font-size:0.85em">
+        Define qual empresa fica ativa para este usuário ao fazer login.
       </div>
     </div>
 
-    <div class="acoes" style="margin-top:16px">
-      <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:500">
-        <input type="checkbox" name="ativo" style="width:auto" {{ 'checked' if (not usuario or usuario.ativo) }}>
-        Ativo
+    <!-- === Status e perfil === -->
+    <hr style="margin:20px 0;border:0;border-top:1px solid #e5e7eb">
+
+    <div style="display:flex;gap:24px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:500;cursor:pointer">
+        <input type="checkbox" name="ativo" style="width:auto;height:auto"
+               {{ 'checked' if (not usuario or usuario.ativo) else '' }}>
+        Usuário ativo
       </label>
-      <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:500">
-        <input type="checkbox" name="is_admin" style="width:auto" {{ 'checked' if usuario and usuario.is_admin }}>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:500;cursor:pointer">
+        <input type="checkbox" name="is_admin" id="is_admin" style="width:auto;height:auto"
+               onchange="alternarPermissoes()"
+               {{ 'checked' if usuario and usuario.is_admin else '' }}>
         Administrador
       </label>
     </div>
 
-    <div class="acoes" style="margin-top:18px">
+    <!-- === Permissões individuais === -->
+    <hr style="margin:20px 0;border:0;border-top:1px solid #e5e7eb">
+
+    <h3 style="margin:0 0 4px;font-size:1em">Permissões individuais</h3>
+    <p class="texto-suave" style="margin:0 0 14px;font-size:0.85em">
+      Marque as permissões específicas. Administradores têm todas automaticamente
+      (não é necessário marcar individualmente).
+    </p>
+
+    {% set user_perms = usuario and get_permissoes(usuario) or [] %}
+
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:6px">
+      {% for chave, desc in permissoes.items() %}
+      <label class="perm-label" style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:0.88em;cursor:pointer;padding:3px 0">
+        <input type="checkbox" name="perm_{{ chave }}" class="perm-checkbox" style="width:auto;height:auto"
+               {{ 'checked' if chave in user_perms else '' }}
+               {{ 'disabled' if usuario and usuario.is_admin else '' }}>
+        {{ desc }}
+      </label>
+      {% endfor %}
+    </div>
+
+    <!-- === Ações === -->
+    <div class="acoes" style="margin-top:22px;padding-top:16px;border-top:1px solid #e5e7eb">
       <button type="submit" class="btn">💾 Salvar</button>
       <a class="btn secundario" href="{{ url_for('admin') }}">Cancelar</a>
     </div>
   </form>
 </div>
+
+<script>
+function alternarPermissoes() {
+  var adminCb = document.getElementById('is_admin');
+  document.querySelectorAll('.perm-checkbox').forEach(function(c) {
+    c.disabled = adminCb.checked;
+    if (adminCb.checked) c.checked = true;
+  });
+}
+document.addEventListener('DOMContentLoaded', function() {
+  alternarPermissoes(); // Garante estado correto ao carregar
+});
+</script>
 {% endblock %}
