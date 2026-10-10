@@ -165,7 +165,7 @@
           {% else %}
             <button type="submit" class="btn">💾 Salvar dados</button>
             {% if not is_admin %}
-              <a class="btn secundario" href="{{ url_for('dashboard') }}">Ver dashboard</a>
+              <a class="btn secundario" href="{{ url_for('dashboard') }}">Ver painel</a>
             {% else %}
               <a class="btn secundario" href="{{ url_for('dashboard', usuario_id=alvo.id) }}">Ver dashboard</a>
             {% endif %}

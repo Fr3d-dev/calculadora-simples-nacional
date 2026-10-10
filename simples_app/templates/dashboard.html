@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block titulo %}Dashboard · Calculadora Simples Nacional{% endblock %}
+{% block titulo %}Painel · Calculadora Simples Nacional{% endblock %}
 
 {% block conteudo %}
 <div class="cabecalho-pagina">
   <div>
-    <h1>Dashboard</h1>
+    <h1>Painel</h1>
     <p>
       Visão geral do Simples Nacional — {{ alvo.nome }}
       {% if g.usuario.is_admin %} · empresa do usuário selecionado{% endif %}

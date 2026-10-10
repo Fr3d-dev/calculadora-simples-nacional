@@ -107,17 +107,18 @@
       <!-- Quadro CNAE · Descrição · Anexo (informativo; não é salvo) -->
       <div id="quadro-cnae" style="display:none;margin-top:16px">
         <div class="texto-suave" style="font-size:12px;margin-bottom:8px">
-          Quadro informativo. O anexo é sempre calculado automaticamente pelo sistema
-          {% if not is_admin %}e não pode ser alterado.{% else %}— administradores podem
-          escolher um anexo diferente apenas para conferência nesta tela.{% endif %}
+          Quadro informativo. Os anexos são calculados automaticamente pelo sistema. Quando a
+          atividade admite mais de um enquadramento (ex.: indústria ou serviço), todos os
+          anexos possíveis são exibidos. {% if not is_admin %}Não podem ser alterados.{% else %}Administradores podem escolher um anexo diferente apenas para conferência nesta tela.{% endif %}
         </div>
         <div class="tabela-quadro">
           <table>
             <thead>
               <tr>
-                <th style="width:26%">CNAE</th>
+                <th style="width:22%">CNAE</th>
                 <th>Descrição</th>
-                <th style="width:22%">Anexo</th>
+                <th style="width:20%">Anexo(s)</th>
+                <th style="width:16%">Explicação</th>
               </tr>
             </thead>
             <tbody id="quadro-cnae-corpo"></tbody>
@@ -267,31 +268,60 @@
     return div.innerHTML;
   }
 
+  // Lista os anexos possíveis de uma linha. Usa "anexos_candidatos" quando o
+  // backend informa (ex.: ["II","III"]); senão recai no anexo sugerido único.
+  function anexosDaLinha(linha) {
+    var cands = linha.anexos_candidatos || [];
+    if (!cands.length && linha.anexo) cands = [linha.anexo];
+    return cands;
+  }
+
   function celulaAnexo(linha) {
+    var cands = anexosDaLinha(linha);
+    var rotulo = cands.length
+      ? 'Anexo ' + cands.map(escapar).join(', ')
+      : 'não identificado';
+
     if (!IS_ADMIN) {
-      if (!linha.anexo) return '<span class="badge-anexo sem-anexo">não identificado</span>';
-      return '<span class="badge-anexo">Anexo ' + escapar(linha.anexo) + '</span>';
+      if (!cands.length) return '<span class="badge-anexo sem-anexo">não identificado</span>';
+      return '<span class="badge-anexo">' + rotulo + '</span>';
     }
 
     // Administrador: seletor editável, pré-selecionado com a sugestão automática.
-    const opcoes = ['<option value="">— não definido —</option>']
+    // Quando há mais de um anexo possível, o primeiro (recomendado) vem marcado.
+    var sugerido = cands.length ? cands[0] : linha.anexo;
+    var opcoes = ['<option value="">— não definido —</option>']
       .concat(ANEXOS.map(function (a) {
-        const sel = (linha.anexo === a) ? ' selected' : '';
+        var sel = (sugerido === a) ? ' selected' : '';
         return '<option value="' + a + '"' + sel + '>Anexo ' + a + '</option>';
       }))
       .join('');
 
-    const titulo = linha.descricao_grupo
-      ? ' title="Sugestão automática: ' + escapar(linha.descricao_grupo) +
-        ' (confiança ' + escapar(linha.confianca) + ')"'
+    var titulo = linha.descricao_grupo
+      ? 'Sugestão automática: ' + linha.descricao_grupo +
+        ' (confiança ' + linha.confianca + ')'
       : '';
 
-    return '<select class="anexo-select" data-codigo="' + escapar(linha.codigo) + '"' +
-           titulo + '>' + opcoes + '</select>';
+    var select = '<select class="anexo-select" data-codigo="' + escapar(linha.codigo) + '"' +
+                 ' title="' + escapar(titulo) + '">' + opcoes + '</select>';
+
+    // Legenda sempre visível (sem precisar de hover): lista os anexos possíveis
+    // e destaca o recomendado. Só faz sentido quando há mais de uma opção.
+    if (cands.length > 1) {
+      var legenda = cands.map(function (a) {
+        var marca = (a === sugerido) ? ' recomendado' : '';
+        return '<span class="anexo-tag' + marca + '">Anexo ' + escapar(a) + '</span>';
+      }).join('');
+      return '<div class="anexo-celula">' + select +
+             '<div class="anexo-legenda" title="Todos os anexos possíveis para este CNAE">' +
+             legenda + '</div></div>';
+    }
+
+    return select;
   }
 
   function linhaSeparador(texto) {
-    return '<tr class="linha-separador"><td colspan="3">' + escapar(texto) + '</td></tr>';
+    return '<tr class="linha-separador"><td colspan="4">' + escapar(texto) + '</td></tr>';
   }
 
   function montarTabela(linhas) {
@@ -301,8 +331,12 @@
     // Usuário comum só enxerga CNAEs que resultaram em um anexo definido.
     // Se nenhum CNAE tiver anexo, o quadro inteiro fica oculto.
     if (!IS_ADMIN) {
-      principais = principais.filter(function (l) { return l.anexo; });
-      secundarios = secundarios.filter(function (l) { return l.anexo; });
+      principais = principais.filter(function (l) {
+        return l.anexo || (l.anexos_candidatos || []).length;
+      });
+      secundarios = secundarios.filter(function (l) {
+        return l.anexo || (l.anexos_candidatos || []).length;
+      });
 
       if (!principais.length && !secundarios.length) {
         caixa.style.display = 'none';
@@ -326,10 +360,10 @@
     // Para o admin, mantém as seções vazias explícitas (ele vê o quadro completo).
     if (IS_ADMIN) {
       if (!principais.length) {
-        partes.splice(1, 0, '<tr><td colspan="3" class="texto-suave">Não informado.</td></tr>');
+        partes.splice(1, 0, '<tr><td colspan="4" class="texto-suave">Não informado.</td></tr>');
       }
       if (!secundarios.length) {
-        partes.push('<tr><td colspan="3" class="texto-suave">' +
+        partes.push('<tr><td colspan="4" class="texto-suave">' +
                     'Nenhum CNAE secundário informado.</td></tr>');
       }
     }
@@ -340,16 +374,115 @@
 
   function montarLinha(linha) {
     const classe = linha.escopo === 'principal' ? ' class="linha-principal"' : '';
+    const idDetalhe = 'exp-' + (linha.codigo || 'sem-cnae').replace(/[^0-9A-Za-z]/g, '') +
+                      '-' + Math.random().toString(36).slice(2, 7);
     return '<tr' + classe + '>' +
       '<td class="codigo-cnae">' + (escapar(linha.codigo) || '—') + '</td>' +
       '<td>' + (escapar(linha.descricao) || '<span class="texto-suave">sem descrição</span>') + '</td>' +
       '<td>' + celulaAnexo(linha) + '</td>' +
+      '<td><button type="button" class="btn-explicar" data-alvo="' + idDetalhe + '" ' +
+        'data-cnae="' + escapar(linha.codigo) + '" ' +
+        'data-descricao="' + escapar(linha.descricao) + '">💡 Ver explicação</button></td>' +
+    '</tr>' +
+    '<tr class="linha-explicacao" id="' + idDetalhe + '" style="display:none">' +
+      '<td colspan="4"><div class="explicacao-conteudo"></div></td>' +
     '</tr>';
   }
 
+  // Renderiza o conteúdo da explicação (carregado sob demanda).
+  function renderExplicacao(dados) {
+    var html = '<div class="exp-titulo">' + escapar(dados.titulo || 'Explicação') + '</div>';
+
+    if (dados.resumo) {
+      html += '<p>' + escapar(dados.resumo) + '</p>';
+    }
+
+    var itens = dados.itens_lc116 || [];
+    if (itens.length) {
+      html += '<div class="exp-subtitulo">Detalhamento pela LC 116/2003</div>';
+      html += '<table class="exp-tabela"><thead><tr>' +
+              '<th>Item</th><th>Situação</th><th>Tributo</th><th>Enquadramento</th>' +
+              '</tr></thead><tbody>';
+      itens.forEach(function (it) {
+        var trib = (it.tributo || '').toUpperCase();
+        var cls = trib === 'ICMS' ? 'exp-trib-icms' : 'exp-trib-iss';
+        html += '<tr>' +
+          '<td>' + escapar(it.item) + '</td>' +
+          '<td>' + escapar(it.descricao) + '</td>' +
+          '<td><span class="' + cls + '">' + escapar(it.tributo) + '</span></td>' +
+          '<td>' + escapar(it.anexo) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    if (dados.destino) {
+      html += '<div class="exp-destino">➡️ ' + escapar(dados.destino) + '</div>';
+    }
+
+    var sug = dados.sugestao || {};
+    if (sug.anexo || (sug.anexos_candidatos || []).length) {
+      var cands = sug.anexos_candidatos || [];
+      var anexoTxt = sug.anexo ? ('Anexo ' + escapar(sug.anexo)) : 'indefinido';
+      if (cands.length > 1) anexoTxt += ' (possíveis: ' + cands.map(function (a) { return 'Anexo ' + escapar(a); }).join(', ') + ')';
+      html += '<div class="exp-sugestao"><strong>Sugestão do sistema:</strong> ' + anexoTxt +
+              (sug.descricao_grupo ? ' — ' + escapar(sug.descricao_grupo) : '') + '</div>';
+    }
+
+    if (dados.fundamento) {
+      html += '<div class="exp-fundamento">' + escapar(dados.fundamento) + '</div>';
+    }
+
+    return html;
+  }
+
+  // Abre/fecha o painel de explicação de um CNAE, buscando no backend.
+  async function alternarExplicacao(botao) {
+    var alvo = document.getElementById(botao.getAttribute('data-alvo'));
+    if (!alvo) return;
+    var conteudo = alvo.querySelector('.explicacao-conteudo');
+
+    // Já aberto: apenas fecha.
+    if (alvo.style.display !== 'none') {
+      alvo.style.display = 'none';
+      botao.textContent = '💡 Ver explicação';
+      return;
+    }
+
+    alvo.style.display = '';
+    botao.textContent = '🔽 Fechar';
+
+    // Já carregado: não refaz a requisição.
+    if (conteudo.getAttribute('data-carregado') === '1') return;
+    conteudo.innerHTML = '<div class="texto-suave">Carregando explicação…</div>';
+
+    try {
+      var resp = await fetch('{{ url_for("api_cnae_explicar") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cnae: botao.getAttribute('data-cnae') || '',
+          descricao: botao.getAttribute('data-descricao') || ''
+        })
+      });
+      var dados = await resp.json();
+      conteudo.innerHTML = renderExplicacao(dados);
+      conteudo.setAttribute('data-carregado', '1');
+    } catch (err) {
+      conteudo.innerHTML = '<div class="texto-suave">Erro ao carregar explicação: ' +
+                           escapar(err.message) + '</div>';
+    }
+  }
+
+  // Delegação de eventos: o quadro é remontado dinamicamente.
+  corpo.addEventListener('click', function (ev) {
+    var botao = ev.target.closest('.btn-explicar');
+    if (botao) alternarExplicacao(botao);
+  });
+
   async function gerarQuadro() {
     caixa.style.display = 'block';
-    corpo.innerHTML = '<tr><td colspan="3" class="texto-suave">Consultando…</td></tr>';
+    corpo.innerHTML = '<tr><td colspan="4" class="texto-suave">Consultando…</td></tr>';
 
     try {
       const resp = await fetch('{{ url_for("api_cnae_quadro") }}', {
@@ -368,7 +501,7 @@
         caixa.style.display = 'none';
         corpo.innerHTML = '';
       } else {
-        corpo.innerHTML = '<tr><td colspan="3" class="texto-suave">' +
+        corpo.innerHTML = '<tr><td colspan="4" class="texto-suave">' +
                           'Erro ao gerar o quadro: ' + escapar(err.message) + '</td></tr>';
       }
     }

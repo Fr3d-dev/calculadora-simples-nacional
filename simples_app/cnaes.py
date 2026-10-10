@@ -494,6 +494,106 @@ def sugerir_anexo(cnae: str, descricao: str = "") -> dict:
     }
 
 
+def anexos_candidatos(cnae: str, descricao: str = "") -> list:
+    """
+    Todos os anexos LEGALMENTE pertinentes a um CNAE/atividade.
+
+    Diferente de sugerir_anexo() — que sempre elege UM vencedor — esta função
+    devolve a lista completa de anexos possíveis, para que a interface libere
+    a simulação de todos eles (ex.: o fator R decide entre V e III).
+
+    É ADITIVA e retrocompatível: não substitui nem altera sugerir_anexo().
+    Retorna uma lista ordenada (o recomendado primeiro, quando houver).
+    """
+    base = sugerir_anexo(cnae, descricao)
+    principal = (base.get("anexo") or "").upper()
+    texto = normalizar(descricao) + " " + normalizar(cnae)
+    digitos = apenas_digitos(cnae)
+    prefixo2 = digitos[:2]
+
+    candidatos = []
+
+    def _add(anexo):
+        anexo = (anexo or "").upper()
+        if anexo in ("I", "II", "III", "IV", "V") and anexo not in candidatos:
+            candidatos.append(anexo)
+
+    # 1) O anexo recomendado vem primeiro.
+    _add(principal)
+
+    # 2) Anexo V <-> Anexo III: a regra do fator R (folha >= 28% da RBT12).
+    #    Sempre que um deles for pertinente, o outro também é possível.
+    if principal in ("III", "V"):
+        _add("III")
+        _add("V")
+
+    # 3) Comércio (I) x Indústria (II): "produz o que vende" alterna o anexo.
+    #    Só libera o Anexo I quando há INDÍCIO REAL de comércio/revenda — seja
+    #    por palavra-chave na descrição, seja por divisão típica de comércio
+    #    varejista (47). A divisão 45 (veículos) é MISTA: só conta como
+    #    comércio se a descrição indicar venda/revenda (reparação/manutenção
+    #    é serviço, Anexo III). Assim, uma indústria/serviço puro NÃO recebe o
+    #    Anexo I indevidamente (ex.: impressão gráfica -> II e III, nunca I).
+    tem_comercio = (
+        any(normalizar(p) in texto for p in _PALAVRAS_COMERCIO)
+        or prefixo2 == "47"
+    )
+    if principal in ("I", "II") and tem_comercio:
+        _add("I")
+        _add("II")
+
+    # 3.1) Indústria (II) x Serviço (III): a MESMA atividade industrial pode ser
+    #      enquadrada como industrialização por conta própria (II) ou como
+    #      prestação de serviço (III) — ex.: impressão gráfica. Nesse caso
+    #      liberamos AMBOS.
+    #      Porém, quando o principal já é um SERVIÇO (III), NÃO puxamos o
+    #      Anexo II: reparação/manutenção, por exemplo, é serviço (III) e não
+    #      deve liberar indústria. O Anexo II só entra se houver indício real
+    #      de industrialização na descrição.
+    if principal == "II":
+        _add("II")
+        _add("III")
+    elif principal == "III":
+        if any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA):
+            _add("II")
+        _add("III")
+
+    # 4) Divisões tipicamente ambíguas, mesmo quando a heurística erra o cap.
+    #    Comércio tem PRIORIDADE: se a atividade é, na prática, revenda/comércio,
+    #    não forçamos o Anexo IV (ex.: 4744-0/99 comércio de material de
+    #    construção é Anexo I, não IV).
+    if prefixo2 in ("45",):
+        # Revenda (I) x manutenção/reparação (III). Reparação/manutenção de
+        # veículos é SERVIÇO: só I se houver indício real de comércio.
+        if tem_comercio:
+            _add("I")
+        _add("III")
+    if prefixo2 in ("47",):
+        # Varejo (I) x produção própria (II).
+        _add("I")
+        if any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA):
+            _add("II")
+    if not tem_comercio:
+        if prefixo2 in ("43", "80", "81"):
+            # Construção, vigilância e limpeza -> Anexo IV.
+            _add("IV")
+        if any(p in texto for p in ("construcao", "construção", "obra",
+                                    "vigilancia", "vigilância", "limpeza")):
+            _add("IV")
+
+    # Anexo IV é incompatível com a lógica do fator R; mantém só o que existe.
+    if not candidatos:
+        _add(principal)
+
+    # Atividades exclusivas do Anexo IV (construção, vigilância, limpeza) não
+    # podem receber III/V por causa da bifurcação II<->III: nesses casos o
+    # enquadramento correto é só o Anexo IV.
+    if "IV" in candidatos:
+        return ["IV"]
+
+    return candidatos
+
+
 def _refinar_servico(anexo: str, texto_normalizado: str) -> str:
     """
     Ajusta o Anexo III/IV/V de acordo com palavras-chave adicionais.

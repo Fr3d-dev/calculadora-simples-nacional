@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block titulo %}Calculadora Simples Nacional{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ ASSET_VERSION }}">
 </head>
 <body>
   <header class="topbar">
@@ -19,9 +19,9 @@
       {% endif %}
       {% if is_admin or tem_permissao('importar_xml') %}
       <a href="{{ url_for('importar_xml') }}"
-         class="{{ 'ativo' if request.endpoint == 'importar_xml' }}">Import XML</a>
+         class="{{ 'ativo' if request.endpoint == 'importar_xml' }}">Importar XML</a>
       {% endif %}
-      <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Dashboard</a>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Painel</a>
       {# Anexos identificados: usuário comum vê só os da sua empresa (pode ser nenhum). #}
       {% for a in anexos_menu %}
         <a href="{{ url_for('anexo_view', anexo=a) }}"

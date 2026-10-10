@@ -48,6 +48,7 @@ import calc
 import cnaes
 import consulta_cnpj
 import database as db
+import explicacoes
 import extrato_simples
 import xml_import
 
@@ -96,10 +97,20 @@ def create_app() -> Flask:
     os.makedirs(os.path.join(APP_DIR, "instance"), exist_ok=True)
 
     app.teardown_appcontext(db.close_db)
+
+    # Versão dos assets (CSS) para cache-busting automático: usa o mtime do
+    # arquivo, então o navegador baixa a versão nova sempre que ele muda.
+    try:
+        _css_path = os.path.join(APP_DIR, "static", "style.css")
+        ASSET_VERSION = str(int(os.path.getmtime(_css_path)))
+    except OSError:
+        ASSET_VERSION = ANO_REFERENCIA
+
     app.jinja_env.globals.update(
         formatar_moeda=calc.formatar_moeda,
         formatar_percentual=calc.formatar_percentual,
         ANO_REFERENCIA=ANO_REFERENCIA,
+        ASSET_VERSION=ASSET_VERSION,
         SIMPLES_EMPRESA=SIMPLES_EMPRESA,
         CNPJ_EMPRESA=CNPJ_EMPRESA,
         empresa_ativa=empresa_ativa,
@@ -289,6 +300,13 @@ def anexos_identificados(empresa) -> list:
         codigo = (linha.get("anexo") or "").strip().upper()
         if codigo in ANEXOS_TODOS and codigo not in encontrados:
             encontrados.append(codigo)
+        # Libera também os anexos alternativos pertinentes ao MESMO CNAE
+        # (ex.: V<->III pelo fator R; I<->II por produzir/revender), para que
+        # a simulação de cálculo não fique bloqueada.
+        for alternativo in linha.get("anexos_candidatos", []):
+            alternativo = (alternativo or "").strip().upper()
+            if alternativo in ANEXOS_TODOS and alternativo not in encontrados:
+                encontrados.append(alternativo)
 
     return [a for a in ANEXOS_TODOS if a in encontrados]
 
@@ -313,6 +331,8 @@ def _linhas_cnae_empresa(empresa) -> list:
             "descricao": empresa["cnae_descricao"] or "",
             "escopo": "principal",
             "anexo": sugestao.get("anexo"),
+            "anexos_candidatos": cnaes.anexos_candidatos(
+                principal, empresa["cnae_descricao"] or ""),
             "descricao_grupo": sugestao.get("descricao_grupo", ""),
             "observacao": sugestao.get("observacao", ""),
             "confianca": sugestao.get("confianca", ""),
@@ -333,6 +353,7 @@ def _linhas_cnae_empresa(empresa) -> list:
             "descricao": descricao,
             "escopo": "secundario",
             "anexo": sugestao.get("anexo"),
+            "anexos_candidatos": cnaes.anexos_candidatos(codigo or bruto, descricao),
             "descricao_grupo": sugestao.get("descricao_grupo", ""),
             "observacao": sugestao.get("observacao", ""),
             "confianca": sugestao.get("confianca", ""),
@@ -1168,6 +1189,7 @@ def registrar_rotas(app: Flask):
                 "codigo": cnaes.formatar_cnae(principal),
                 "descricao": desc_principal,
                 "anexo": sug["anexo"],
+                "anexos_candidatos": cnaes.anexos_candidatos(principal, desc_principal),
                 "descricao_grupo": sug.get("descricao_grupo", ""),
                 "confianca": sug.get("confianca", ""),
             })
@@ -1192,11 +1214,31 @@ def registrar_rotas(app: Flask):
                 "codigo": cnaes.formatar_cnae(codigo),
                 "descricao": descricao,
                 "anexo": sug["anexo"],
+                "anexos_candidatos": cnaes.anexos_candidatos(codigo, descricao),
                 "descricao_grupo": sug.get("descricao_grupo", ""),
                 "confianca": sug.get("confianca", ""),
             })
 
         return jsonify({"linhas": linhas})
+
+    # ------------------ CNAE: explicar enquadramento (AJAX) ------------------
+    @app.route("/api/cnae/explicar", methods=["POST"])
+    @login_required
+    def api_cnae_explicar():
+        """
+        Devolve a explicação do enquadramento de um CNAE (botão "Ver explicação").
+
+        Recebe {cnae, descricao} e retorna o texto principal, os itens da
+        LC 116/2003 (quando aplicável) e a leitura ISS x ICMS do caso concreto.
+        """
+        dados = request.get_json(silent=True) or {}
+        cnae = (dados.get("cnae") or "").strip()
+        descricao = (dados.get("descricao") or "").strip()
+
+        if not cnae and not descricao:
+            return jsonify({"erro": "Informe o CNAE ou a descrição da atividade."}), 400
+
+        return jsonify(explicacoes.explicar(cnae, descricao))
 
     # ------------------- CNPJ: consulta na Receita (AJAX) --------------------
 

@@ -507,6 +507,129 @@ textarea { resize: vertical; }
   font-weight: 400;
 }
 
+/* Anexos possíveis sempre visíveis (sem depender de hover). */
+.anexo-celula {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+}
+
+.anexo-legenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.anexo-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--borda);
+  color: var(--cinza-escuro, #777);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.anexo-tag.recomendado {
+  background: var(--azul-claro);
+  border-color: var(--azul, #2563eb);
+  color: var(--azul, #2563eb);
+}
+
+/* Botão "Ver explicação" e painel de explicação do CNAE. */
+.btn-explicar {
+  border: 1px solid var(--borda);
+  background: transparent;
+  color: var(--azul, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-explicar:hover {
+  background: var(--azul-claro);
+}
+
+.tr.linha-explicacao > td {
+  background: rgba(0, 0, 0, .02);
+  padding: 0;
+}
+
+.explicacao-conteudo {
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.exp-titulo {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.exp-subtitulo {
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+
+.exp-tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.exp-tabela th,
+.exp-tabela td {
+  border: 1px solid var(--borda);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.exp-tabela th {
+  background: rgba(0, 0, 0, .03);
+  font-weight: 600;
+}
+
+.exp-trib-iss,
+.exp-trib-icms {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.exp-trib-iss {
+  background: var(--azul-claro);
+  color: var(--azul, #2563eb);
+}
+
+.exp-trib-icms {
+  background: #fde68a;
+  color: #92400e;
+}
+
+.exp-destino,
+.exp-sugestao {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--azul-claro);
+}
+
+.exp-fundamento {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--cinza-escuro, #777);
+}
+
 /* ---------------- Importação do extrato do Simples (PDF) ---------------- */
 .importar-extrato {
   display: flex;
