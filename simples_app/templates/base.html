@@ -22,6 +22,10 @@
          class="{{ 'ativo' if request.endpoint == 'importar_xml' }}">Importar XML</a>
       {% endif %}
       <a href="{{ url_for('dashboard') }}" class="{{ 'ativo' if request.endpoint == 'dashboard' }}">Painel</a>
+      {% if is_admin or tem_permissao('ver_relatorios') %}
+      <a href="{{ url_for('relatorios') }}"
+         class="{{ 'ativo' if request.endpoint in ['relatorios', 'relatorios_excel', 'relatorios_pdf'] }}">Relatórios</a>
+      {% endif %}
       {# Anexos identificados: usuário comum vê só os da sua empresa (pode ser nenhum). #}
       {% for a in anexos_menu %}
         <a href="{{ url_for('anexo_view', anexo=a) }}"

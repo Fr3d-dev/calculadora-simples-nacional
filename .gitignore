@@ -25,6 +25,16 @@ extratos/
 # Backups manuais
 _backup/
 
+# Backups e arquivos temporários/diagnósticos
+_backup_*/
+*.bak
+*.bak_*
+_diag_*.py
+_test_*.py
+_organizar_final.py
+consertar_banco.py
+excel_output.txt
+
 # IDE / editor
 .vscode/
 .idea/

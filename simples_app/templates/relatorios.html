@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block titulo %}Relatórios · Calculadora Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Relatórios</h1>
+    <p>
+      Exportação dos dados e do enquadramento de
+      {{ ident.nome_fantasia or ident.razao_social }}{% if ident.cnpj %} · CNPJ {{ ident.cnpj }}{% endif %}.
+    </p>
+  </div>
+</div>
+
+{% if not alvo %}
+<div class="card">
+  <h2>Nenhuma empresa selecionada</h2>
+  <p class="texto-suave">
+    Selecione ou cadastre uma empresa antes de gerar relatórios.
+  </p>
+  <div class="acoes" style="margin-top:14px">
+    <a class="btn" href="{{ url_for('empresas') }}">Ir para empresas</a>
+  </div>
+</div>
+{% else %}
+
+<div class="grid grid-4" style="margin-bottom:18px">
+  <div class="kpi">
+    <div class="rotulo">Razão social</div>
+    <div class="valor" style="font-size:16px">{{ ident.razao_social or '—' }}</div>
+    <div class="sub">{{ ident.nome_fantasia or '—' }}</div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">CNPJ</div>
+    <div class="valor" style="font-size:16px">{{ ident.cnpj or '—' }}</div>
+    <div class="sub">Cadastro da empresa</div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">Anexo</div>
+    <div class="valor" style="font-size:16px">
+      {% if anexos %}{% for a in anexos %}Anexo {{ a }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}—{% endif %}
+    </div>
+    <div class="sub">identificados</div>
+  </div>
+  <div class="kpi">
+    <div class="rotulo">CNAEs</div>
+    <div class="valor" style="font-size:16px">{{ linhas_cnae | length }}</div>
+    <div class="sub">principal + secundários</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Baixar relatórios</h2>
+  <p class="texto-suave">
+    Os arquivos reúnem a identificação da empresa, o enquadramento por CNAE e a
+    base legal aplicável. Formatos disponíveis:
+  </p>
+  <div class="acoes" style="margin-top:14px">
+    <a class="btn" href="{{ url_for('relatorios_excel') }}">⬇ Baixar Excel (.xlsx)</a>
+    <a class="btn" href="{{ url_for('relatorios_pdf') }}">⬇ Baixar PDF</a>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <h2>Prévia do conteúdo</h2>
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:140px">CNAE</th>
+          <th>Descrição</th>
+          <th style="width:120px">Escopo</th>
+          <th style="width:110px">Anexo sugerido</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in linhas_cnae %}
+        <tr>
+          <td>{{ linha.codigo }}</td>
+          <td>{{ linha.descricao or '—' }}</td>
+          <td>
+            <span class="badge anexo">
+              {{ 'Principal' if linha.escopo == 'principal' else 'Secundário' }}
+            </span>
+          </td>
+          <td>{{ ('Anexo ' ~ linha.anexo) if linha.anexo else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="4" style="text-align:center;color:#64748b">
+            Nenhum CNAE cadastrado para esta empresa.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}

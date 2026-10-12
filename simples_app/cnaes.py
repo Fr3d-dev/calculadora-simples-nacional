@@ -538,9 +538,14 @@ def anexos_candidatos(cnae: str, descricao: str = "") -> list:
         any(normalizar(p) in texto for p in _PALAVRAS_COMERCIO)
         or prefixo2 == "47"
     )
+    # Indício real de industrialização/fabricação própria (Anexo II).
+    tem_industria = any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA)
     if principal in ("I", "II") and tem_comercio:
         _add("I")
-        _add("II")
+        # Anexo II (indústria) SÓ entra se a descrição citar indústria/fabricação.
+        # Comércio/revenda puro NÃO libera o Anexo II.
+        if tem_industria:
+            _add("II")
 
     # 3.1) Indústria (II) x Serviço (III): a MESMA atividade industrial pode ser
     #      enquadrada como industrialização por conta própria (II) ou como
@@ -554,7 +559,7 @@ def anexos_candidatos(cnae: str, descricao: str = "") -> list:
         _add("II")
         _add("III")
     elif principal == "III":
-        if any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA):
+        if tem_industria:
             _add("II")
         _add("III")
 
@@ -571,7 +576,8 @@ def anexos_candidatos(cnae: str, descricao: str = "") -> list:
     if prefixo2 in ("47",):
         # Varejo (I) x produção própria (II).
         _add("I")
-        if any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA):
+        # Anexo II só com indício real de fabricação/própria produção.
+        if tem_industria:
             _add("II")
     if not tem_comercio:
         if prefixo2 in ("43", "80", "81"):

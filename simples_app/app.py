@@ -40,7 +40,7 @@ from typing import Optional
 
 from flask import (
     Flask, flash, g, jsonify, redirect, render_template,
-    request, session, url_for,
+    request, send_file, session, url_for,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -278,6 +278,21 @@ def empresa_ativa():
     if not empresa_id:
         return None
     return db.buscar_empresa_por_id(empresa_id)
+
+
+def _codigo_item_lc116(item: str) -> str:
+    """
+    Extrai apenas o código do item da LC 116/2003.
+
+    Ex.: "13.05 (parte final)" -> "13.05"; "13.05" -> "13.05";
+    "" -> "". Usado no relatório Excel para não repetir a descrição.
+    """
+    texto = (item or "").strip()
+    if not texto:
+        return ""
+    import re
+    m = re.match(r"(\d+\.\d+)", texto)
+    return m.group(1) if m else texto
 
 
 def anexos_identificados(empresa) -> list:
@@ -1092,6 +1107,7 @@ def registrar_rotas(app: Flask):
             acao="nova",
             grupos=cnaes.listar_grupos(),
             anexos_simples=cnaes.ANEXOS_SIMPLES,
+            pode_explicar_cnae=db.tem_permissao(g.usuario, "ver_explicacao_cnae"),
         )
 
     @app.route("/empresa/<int:empresa_id>/editar", methods=["GET", "POST"])
@@ -1121,6 +1137,343 @@ def registrar_rotas(app: Flask):
             acao="editar",
             grupos=cnaes.listar_grupos(),
             anexos_simples=cnaes.ANEXOS_SIMPLES,
+            pode_explicar_cnae=db.tem_permissao(g.usuario, "ver_explicacao_cnae"),
+        )
+
+    # ----------------------------- Relatórios --------------------------------
+
+    def _dados_relatorio_empresa(empresa):
+        """
+        Reúne os dados usados pelos relatórios (tela, Excel e PDF).
+
+        Devolve a empresa (sqlite3.Row ou None), a lista de CNAEs (principal +
+        secundários) com o anexo sugerido, a relação de anexos identificados e
+        um dicionário simples com os campos de identificação já normalizados.
+        """
+        linhas = _linhas_cnae_empresa(empresa) if empresa else []
+        # Anexa a cada CNAE a explicação completa (mesmo conteúdo do botão
+        # "Ver explicação" do cadastro), reaproveitando explicacoes.explicar().
+        for linha in linhas:
+            try:
+                linha["explicacao"] = explicacoes.explicar(
+                    linha.get("codigo", ""), linha.get("descricao", "") or "")
+            except Exception:
+                linha["explicacao"] = None
+        identificacao = {
+            "razao_social": (empresa["razao_social"] if empresa else "") or "",
+            "nome_fantasia": (empresa["nome_fantasia"] if empresa else "") or "",
+            "cnpj": (empresa["cnpj"] if empresa else "") or "",
+            "empresa_id": empresa["id"] if empresa else None,
+        }
+        return {
+            "empresa": empresa,
+            "linhas_cnae": linhas,
+            "anexos": anexos_identificados(empresa) if empresa else [],
+            "identificacao": identificacao,
+        }
+
+    @app.route("/relatorios")
+    @permissao_required("ver_relatorios")
+    @login_required
+    def relatorios():
+        """Tela de relatórios da empresa ativa, com opções de download."""
+        alvo = empresa_ativa()
+        contexto = _dados_relatorio_empresa(alvo)
+        return render_template(
+            "relatorios.html",
+            alvo=alvo,
+            ident=contexto["identificacao"],
+            linhas_cnae=contexto["linhas_cnae"],
+            anexos=contexto["anexos"],
+        )
+
+    @app.route("/relatorios/excel")
+    @permissao_required("ver_relatorios")
+    @login_required
+    def relatorios_excel():
+        """Gera e baixa um relatório .xlsx da empresa ativa (openpyxl)."""
+        alvo = empresa_ativa()
+        if not alvo:
+            flash("Selecione uma empresa antes de gerar o relatório.", "aviso")
+            return redirect(url_for("relatorios"))
+
+        contexto = _dados_relatorio_empresa(alvo)
+        ident = contexto["identificacao"]
+
+        import io  # import local: só exige openpyxl quando a rota é usada
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Empresa"
+
+        ws.append(["Relatório — Simples Nacional"])
+        ws.append([])
+        ws.append(["Razão social", ident["razao_social"]])
+        ws.append(["Nome fantasia", ident["nome_fantasia"]])
+        ws.append(["CNPJ", ident["cnpj"]])
+        ws.append([
+            "Anexos identificados",
+            ", ".join(f"Anexo {a}" for a in contexto["anexos"]) or "—",
+        ])
+        ws.append([])
+        ws.append(["CNAEs"])
+        ws.append(["CNAE", "Item (LC 116/2003)", "Descrição", "NBS",
+                   "CClassTrib", "IndOper"])
+
+        for linha in contexto["linhas_cnae"]:
+            explicacao = linha.get("explicacao") or {}
+            itens = explicacao.get("itens_lc116") or []
+            descricao = linha.get("descricao", "") or ""
+
+            if itens:
+                # Um registro por item da LC 116, repetindo o CNAE (o código
+                # do item fica na mesma linha, à frente do CNAE). Usa apenas o
+                # código do item (ex.: "13.05"), sem o sufixo descritivo.
+                # As colunas NBS/CClassTrib/IndOper ficam em branco para
+                # preenchimento manual posterior.
+                for item in itens:
+                    codigo_item = _codigo_item_lc116(item.get("item", ""))
+                    ws.append([
+                        linha.get("codigo", ""),
+                        codigo_item or "—",
+                        descricao,
+                        "",
+                        "",
+                        "",
+                    ])
+            else:
+                # Sem item da LC 116: mostra a descrição do CNAE na coluna
+                # "Item" (conforme solicitado).
+                ws.append([
+                    linha.get("codigo", ""),
+                    descricao or "—",
+                    descricao,
+                    "",
+                    "",
+                    "",
+                ])
+
+        arquivo = io.BytesIO()
+        wb.save(arquivo)
+        arquivo.seek(0)
+
+        nome = (ident["cnpj"] or f"empresa_{ident['empresa_id']}")
+        nome = nome.replace("/", "-").replace(".", "")
+        db.registrar_log(g.usuario, "relatorio_excel",
+                         ident["razao_social"] or str(ident["empresa_id"]))
+        return send_file(
+            arquivo,
+            as_attachment=True,
+            download_name=f"relatorio_{nome}.xlsx",
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+
+    @app.route("/relatorios/pdf")
+    @permissao_required("ver_relatorios")
+    @login_required
+    def relatorios_pdf():
+        """Gera e baixa um relatório PDF da empresa ativa (reportlab)."""
+        alvo = empresa_ativa()
+        if not alvo:
+            flash("Selecione uma empresa antes de gerar o relatório.", "aviso")
+            return redirect(url_for("relatorios"))
+
+        contexto = _dados_relatorio_empresa(alvo)
+        ident = contexto["identificacao"]
+
+        import io  # import local: só exige reportlab quando a rota é usada
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        )
+
+        arquivo = io.BytesIO()
+        doc = SimpleDocTemplate(
+            arquivo,
+            pagesize=A4,
+            leftMargin=18 * mm,
+            rightMargin=18 * mm,
+            topMargin=18 * mm,
+            bottomMargin=18 * mm,
+            title="Relatório — Simples Nacional",
+        )
+
+        estilos = getSampleStyleSheet()
+        titulo = ParagraphStyle(
+            "TituloRel", parent=estilos["Title"], fontSize=16, spaceAfter=10)
+        secao = ParagraphStyle(
+            "SecaoRel", parent=estilos["Heading2"], fontSize=12, spaceBefore=12,
+            spaceAfter=6)
+        normal = estilos["Normal"]
+
+        elementos = [Paragraph("Relatório — Simples Nacional", titulo)]
+
+        info = [
+            ["Razão social", ident["razao_social"] or "—"],
+            ["Nome fantasia", ident["nome_fantasia"] or "—"],
+            ["CNPJ", ident["cnpj"] or "—"],
+            [
+                "Anexos identificados",
+                ", ".join(f"Anexo {a}" for a in contexto["anexos"]) or "—",
+            ],
+        ]
+        tabela_info = Table(info, colWidths=[45 * mm, 130 * mm])
+        tabela_info.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        elementos.append(tabela_info)
+
+        elementos.append(Paragraph("Enquadramento por CNAE", secao))
+        dados = [["CNAE", "Descrição", "Escopo", "Anexo"]]
+        for linha in contexto["linhas_cnae"]:
+            dados.append([
+                Paragraph(str(linha.get("codigo", "")), normal),
+                Paragraph(str(linha.get("descricao", "") or "—"), normal),
+                "Principal" if linha.get("escopo") == "principal" else "Secundário",
+                f"Anexo {linha['anexo']}" if linha.get("anexo") else "—",
+            ])
+        if len(dados) == 1:
+            dados.append(["—", "Nenhum CNAE cadastrado.", "", ""])
+
+        tabela = Table(
+            dados,
+            colWidths=[28 * mm, 92 * mm, 25 * mm, 30 * mm],
+            repeatRows=1,
+        )
+        tabela.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        elementos.append(tabela)
+
+        # ------------------------------------------------------------------
+        # Explicações do enquadramento (mesmo conteúdo do botão
+        # "Ver explicação" do cadastro), para principal + secundários.
+        # ------------------------------------------------------------------
+        if any(linha.get("explicacao") for linha in contexto["linhas_cnae"]):
+            elementos.append(Paragraph("Explicações do enquadramento", secao))
+
+            exp_titulo = ParagraphStyle(
+                "ExpTitulo", parent=estilos["Heading3"], fontSize=11,
+                spaceBefore=10, spaceAfter=2)
+            exp_resumo = ParagraphStyle(
+                "ExpResumo", parent=normal, fontSize=9, spaceAfter=4)
+            exp_sub = ParagraphStyle(
+                "ExpSub", parent=normal, fontSize=9, spaceBefore=4,
+                spaceAfter=2, textColor=colors.HexColor("#334155"))
+            exp_extra = ParagraphStyle(
+                "ExpExtra", parent=normal, fontSize=8.5, spaceBefore=2,
+                spaceAfter=2)
+            exp_fund = ParagraphStyle(
+                "ExpFund", parent=normal, fontSize=8, spaceBefore=4,
+                textColor=colors.grey)
+
+            for linha in contexto["linhas_cnae"]:
+                explicacao = linha.get("explicacao")
+                if not explicacao:
+                    continue
+
+                escopo = ("Principal" if linha.get("escopo") == "principal"
+                          else "Secundário")
+                elementos.append(Paragraph(
+                    f"{explicacao.get('titulo') or 'Explicação'} "
+                    f"— CNAE {linha.get('codigo', '')} ({escopo})",
+                    exp_titulo,
+                ))
+
+                if explicacao.get("resumo"):
+                    elementos.append(Paragraph(explicacao["resumo"], exp_resumo))
+
+                itens = explicacao.get("itens_lc116") or []
+                if itens:
+                    elementos.append(Paragraph(
+                        "Detalhamento pela LC 116/2003", exp_sub))
+                    dados_exp = [["Item", "Situação", "Tributo", "Enquadramento"]]
+                    for it in itens:
+                        dados_exp.append([
+                            Paragraph(str(it.get("item", "") or "—"), normal),
+                            Paragraph(str(it.get("descricao", "") or "—"), normal),
+                            str(it.get("tributo", "") or "—"),
+                            str(it.get("anexo", "") or "—"),
+                        ])
+                    tabela_exp = Table(
+                        dados_exp,
+                        colWidths=[22 * mm, 95 * mm, 22 * mm, 36 * mm],
+                        repeatRows=1,
+                    )
+                    tabela_exp.setStyle(TableStyle([
+                        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+                        ("BACKGROUND", (0, 0), (-1, 0),
+                         colors.HexColor("#eef2ff")),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ]))
+                    elementos.append(tabela_exp)
+
+                if explicacao.get("destino"):
+                    elementos.append(Paragraph(
+                        "➡️ " + explicacao["destino"], exp_extra))
+
+                if explicacao.get("nota_fator_r"):
+                    elementos.append(Paragraph(
+                        "📐 " + explicacao["nota_fator_r"], exp_extra))
+
+                sugestao = explicacao.get("sugestao") or {}
+                cands = sugestao.get("anexos_candidatos") or []
+                if sugestao.get("anexo") or cands:
+                    anexo_txt = (f"Anexo {sugestao['anexo']}"
+                                 if sugestao.get("anexo") else "indefinido")
+                    if len(cands) > 1:
+                        anexo_txt += " (possíveis: " + ", ".join(
+                            f"Anexo {a}" for a in cands) + ")"
+                    grupo = sugestao.get("descricao_grupo") or ""
+                    texto = "<strong>Sugestão do sistema:</strong> " + anexo_txt
+                    if grupo:
+                        texto += " — " + grupo
+                    elementos.append(Paragraph(texto, exp_extra))
+
+                if explicacao.get("fundamento"):
+                    elementos.append(Paragraph(
+                        explicacao["fundamento"], exp_fund))
+
+        elementos.append(Spacer(1, 8))
+        elementos.append(Paragraph(
+            "Documento gerado automaticamente pela Calculadora Simples Nacional. "
+            "O enquadramento é uma sugestão e deve ser confirmado por um contador.",
+            ParagraphStyle("Aviso", parent=normal, fontSize=7,
+                           textColor=colors.grey),
+        ))
+
+        doc.build(elementos)
+        arquivo.seek(0)
+
+        nome = (ident["cnpj"] or f"empresa_{ident['empresa_id']}")
+        nome = nome.replace("/", "-").replace(".", "")
+        db.registrar_log(g.usuario, "relatorio_pdf",
+                         ident["razao_social"] or str(ident["empresa_id"]))
+        return send_file(
+            arquivo,
+            as_attachment=True,
+            download_name=f"relatorio_{nome}.pdf",
+            mimetype="application/pdf",
         )
 
     @app.route("/empresa/<int:empresa_id>/excluir", methods=["POST"])
@@ -1223,6 +1576,7 @@ def registrar_rotas(app: Flask):
 
     # ------------------ CNAE: explicar enquadramento (AJAX) ------------------
     @app.route("/api/cnae/explicar", methods=["POST"])
+    @permissao_required("ver_explicacao_cnae")
     @login_required
     def api_cnae_explicar():
         """

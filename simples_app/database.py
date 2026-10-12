@@ -200,9 +200,11 @@ PERMISSOES_DISPONIVEIS = {
     "importar_extrato": "Importar extrato PGDAS-D (PDF)",
     "gerenciar_empresas": "Cadastrar/editar/excluir empresas",
     "gerenciar_usuarios": "Criar/editar/excluir usuários",
+    "ver_relatorios": "Visualizar/baixar relatórios (Excel e PDF)",
     "ver_logs": "Visualizar logs de auditoria",
     "editar_tabelas": "Editar tabelas de alíquotas e faixas",
     "consultar_cnpj": "Consultar CNPJ na Receita Federal",
+    "ver_explicacao_cnae": "Ver explicação do enquadramento de CNAE (LC 116/2003)",
 }
 
 # Conjunto de permissões que o administrador tem por padrão (todas).

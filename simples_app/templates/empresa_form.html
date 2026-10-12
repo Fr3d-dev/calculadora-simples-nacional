@@ -118,7 +118,7 @@
                 <th style="width:22%">CNAE</th>
                 <th>Descrição</th>
                 <th style="width:20%">Anexo(s)</th>
-                <th style="width:16%">Explicação</th>
+                {% if pode_explicar_cnae %}<th style="width:16%">Explicação</th>{% endif %}
               </tr>
             </thead>
             <tbody id="quadro-cnae-corpo"></tbody>
@@ -252,6 +252,7 @@
 /* --------------- Quadro CNAE · Descrição · Anexo (informativo) --------------- */
 (function () {
   const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+  const PODE_EXPLICAR = {{ 'true' if pode_explicar_cnae else 'false' }};
   const ANEXOS = ['I', 'II', 'III', 'IV', 'V'];
 
   const btn = document.getElementById('btn-quadro');
@@ -376,17 +377,23 @@
     const classe = linha.escopo === 'principal' ? ' class="linha-principal"' : '';
     const idDetalhe = 'exp-' + (linha.codigo || 'sem-cnae').replace(/[^0-9A-Za-z]/g, '') +
                       '-' + Math.random().toString(36).slice(2, 7);
+    const celulaExplicar = PODE_EXPLICAR
+      ? '<td><button type="button" class="btn-explicar" data-alvo="' + idDetalhe + '" ' +
+          'data-cnae="' + escapar(linha.codigo) + '" ' +
+          'data-descricao="' + escapar(linha.descricao) + '">💡 Ver explicação</button></td>'
+      : '';
+    const linhaDetalhe = PODE_EXPLICAR
+      ? '<tr class="linha-explicacao" id="' + idDetalhe + '" style="display:none">' +
+          '<td colspan="4"><div class="explicacao-conteudo"></div></td>' +
+        '</tr>'
+      : '';
     return '<tr' + classe + '>' +
       '<td class="codigo-cnae">' + (escapar(linha.codigo) || '—') + '</td>' +
       '<td>' + (escapar(linha.descricao) || '<span class="texto-suave">sem descrição</span>') + '</td>' +
       '<td>' + celulaAnexo(linha) + '</td>' +
-      '<td><button type="button" class="btn-explicar" data-alvo="' + idDetalhe + '" ' +
-        'data-cnae="' + escapar(linha.codigo) + '" ' +
-        'data-descricao="' + escapar(linha.descricao) + '">💡 Ver explicação</button></td>' +
+      celulaExplicar +
     '</tr>' +
-    '<tr class="linha-explicacao" id="' + idDetalhe + '" style="display:none">' +
-      '<td colspan="4"><div class="explicacao-conteudo"></div></td>' +
-    '</tr>';
+    linhaDetalhe;
   }
 
   // Renderiza o conteúdo da explicação (carregado sob demanda).
@@ -418,6 +425,10 @@
 
     if (dados.destino) {
       html += '<div class="exp-destino">➡️ ' + escapar(dados.destino) + '</div>';
+    }
+
+    if (dados.nota_fator_r) {
+      html += '<div class="exp-fator-r">📐 ' + escapar(dados.nota_fator_r) + '</div>';
     }
 
     var sug = dados.sugestao || {};
