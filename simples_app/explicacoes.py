@@ -347,7 +347,7 @@ EXPLICACOES_CNAE: list[dict] = [
         "titulo": "Educação e ensino",
         "resumo": (
             "Escolas, cursos, treinamento e educação em geral -> Anexo III. "
-            "Algumas atividades regulamentadas podem recair no Anexo V."
+            "Ensino livre/instrução (item 8.02) pode ir ao Anexo V pelo fator R."
         ),
         "itens_lc116": [
             {
@@ -364,8 +364,9 @@ EXPLICACOES_CNAE: list[dict] = [
             },
         ],
         "fundamento": (
-            "Itens 8.01 e 8.02 da LC 116/2003. Anexos III e V da LC 123/2006 "
-            "(ensino livre/franquia -> Anexo V; ensino regular -> Anexo III)."
+            "Itens 8.01 e 8.02 da LC 116/2003. Anexo III da LC 123/2006 para o "
+            "ensino regular (item 8.01); para o ensino livre/instrução (item "
+            "8.02), Anexo III ou V conforme o fator R (§5º-B, I)."
         ),
     },
     {

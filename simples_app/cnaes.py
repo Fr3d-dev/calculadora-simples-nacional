@@ -63,12 +63,15 @@ _PALAVRAS_SERVICOS = (
 )
 
 # Serviços que tipicamente vão para o Anexo V (sujeitos ao fator R).
+# Obs.: "ensino" NÃO consta aqui — a educação é tratada por
+# _PALAVRAS_ENSINO_LIVRE (ensino livre/instrução -> V) e o ensino regular é
+# exclusivamente Anexo III.
 _PALAVRAS_ANEXO_V = (
     "auditoria", "jornalismo", "publicidade", "propaganda", "engenharia",
     "arquitetura", "medicina", "odontologia", "advocacia", "contabilidade",
     "consultoria", "assessoria", "programacao", "programação", "software",
-    "desenvolvimento de sistemas", "design", "treinamento", "ensino",
-    "representacao comercial", "representação comercial", "corretagem",
+    "desenvolvimento de sistemas", "design", "representacao comercial",
+    "representação comercial", "corretagem",
     "gestao", "gestão", "marketing", "fisioterapia", "nutricao", "nutrição",
     "psicologia", "veterinaria", "veterinária", "enfermagem", "farmácia",
     "analises clinicas", "análises clínicas", "laboratorio", "laboratório",
@@ -85,14 +88,87 @@ _PALAVRAS_ANEXO_IV = (
 
 # Serviços que permanecem no Anexo III mesmo contendo palavras típicas do V.
 # Ex.: "treinamento" (educação) e "manutencao" (reparação) são Anexo III.
+#
+# ATENÇÃO: "ensino" e "treinamento" também aparecem no Anexo V quando se trata
+# de ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116/2003), que é hipótese legal
+# de fator R (§5º-B, I, da LC 123/2006). A palavra "treinamento" foi por isso
+# REMOVIDA desta lista; a bifurcação III<->V da educação é decidida em
+# _sujeito_anexo_v()/_refinar_servico() com base em _PALAVRAS_ENSINO_LIVRE.
 _PALAVRAS_ANEXO_III_FORTE = (
-    "ensino", "educacao", "educação", "escola", "curso", "treinamento",
-    "pre-escola", "pré-escola", "universidade", "idioma", "reparacao",
-    "reparação", "manutencao", "manutenção", "conserto", "restaurante",
-    "lanchonete", "padaria", "academia", "fitness", "transporte",
-    "locacao", "locação", "aluguel", "estacionamento", "hotel", "hospedagem",
-    "fisioterapia", "estetica", "estética", "barbearia", "cabeleireiro",
+    "ensino regular", "pre-escola", "pré-escola", "ensino fundamental",
+    "ensino medio", "ensino médio", "educacao infantil", "educação infantil",
+    "educacao basica", "educação básica", "ensino superior", "universidade",
+    "graduacao", "graduação",
+    "reparacao", "reparação", "manutencao", "manutenção", "conserto",
+    "restaurante", "lanchonete", "padaria", "academia", "fitness",
+    "transporte", "locacao", "locação", "aluguel", "estacionamento",
+    "hotel", "hospedagem", "fisioterapia", "estetica", "estética",
+    "barbearia", "cabeleireiro",
 )
+
+# ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116/2003).
+# Este sim PODE ser tributado no Anexo V pelo fator R (§5º-B, I, da LC
+# 123/2006). Diferente do ENSINO REGULAR (item 8.01), que é exclusivamente
+# Anexo III. Ex.: curso de idiomas, treinamento gerencial, instrutoria.
+_PALAVRAS_ENSINO_LIVRE = (
+    "ensino livre", "curso livre", "instrucao", "instrução",
+    "treinamento", "capacitacao", "capacitação", "instrutor",
+    "orientacao pedagogica", "orientação pedagógica", "idioma",
+    "musica", "música", "danca", "dança", "profissionalizante",
+)
+
+# Divisões/grupos de CNAE cujas atividades PODEM ser tributadas no Anexo V
+# (serviços do §5º-C do art. 18 da LC 123/2006), sujeitas ao fator R. Só para
+# estas faixas faz sentido liberar a bifurcação Anexo III <-> Anexo V.
+#
+# Atividades que NÃO aparecem aqui são exclusivamente Anexo III (ex.: educação
+# 85xx, transporte 49xx/52xx, locação de bens móveis 77xx, academias/esporte
+# 93xx, reparação/manutenção e beleza 95xx/96xx, alimentação 56xx). Liberar o
+# Anexo V para elas (como fazia a regra genérica anterior) gerava enquadramento
+# indevido — por exemplo a educação pré-escola aparecendo como Anexo V.
+_PREFIXOS_ANEXO_V = (
+    # TI e software
+    "62", "63",
+    # Serviços profissionais, científicos e técnicos (engenharia, arquitetura,
+    # contabilidade, advocacia, publicidade/marketing, design, medicina etc.)
+    "69", "70", "71", "72", "73", "74", "75",
+    # Produção audiovisual / edição / rádio e TV
+    "58", "59", "60",
+    # Saúde humana, veterinária e serviços sociais
+    "86", "87", "88",
+)
+
+
+def _sujeito_anexo_v(cnae: str, texto_normalizado: str) -> bool:
+    """
+    Indica se a atividade é tipicamente passível de tributação no Anexo V
+    (serviços do §5º-C), o que autoriza a bifurcação III<->V pelo fator R.
+
+    Critério principal: prefixo do CNAE nas faixas do Anexo V. Reforço:
+    palavras-chave de serviços intelectuais na descrição — ignorando palavras
+    que também caracterizam o Anexo III (ex.: "ensino"/"treinamento"), para não
+    liberar o V a atividades exclusivas do III.
+    """
+    digitos = apenas_digitos(cnae)
+    if any(digitos.startswith(p) for p in _PREFIXOS_ANEXO_V):
+        return True
+    alvo = texto_normalizado
+
+    # EDUCAÇÃO (divisão 85): caso especial e mais sensível.
+    #   - ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116) -> pode ir ao V
+    #     (fator R, §5º-B, I, da LC 123/2006).
+    #   - ENSINO REGULAR (item 8.01) -> SOMENTE Anexo III.
+    if digitos.startswith("85"):
+        return any(normalizar(p) in alvo for p in _PALAVRAS_ENSINO_LIVRE)
+
+    # Palavras-chave que também caracterizam o Anexo III não devem, por si só,
+    # sugerir o V (ex.: "academia", "transporte").
+    exclusivo_iii = {normalizar(p) for p in _PALAVRAS_ANEXO_III_FORTE}
+    for palavra in _PALAVRAS_ANEXO_V:
+        p = normalizar(palavra)
+        if p and p in alvo and p not in exclusivo_iii:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +280,7 @@ GRUPOS_CNAE = [
                      "van", "escolar", "coletivo", "transporte de passageiro"),
         "anexo": "III",
         "prioridade": 65,
-        "observacao": "Transporte de passageiros -> Anexo III (pode ir ao V pelo fator R).",
+        "observacao": "Transporte de passageiros -> Anexo III (não vai ao Anexo V).",
     },
     {
         "descricao": "Transporte de cargas",
@@ -212,7 +288,7 @@ GRUPOS_CNAE = [
         "palavras": ("carga", "cargueiro", "mudanca", "mudança", "frete", "transporte de carga"),
         "anexo": "III",
         "prioridade": 65,
-        "observacao": "Transporte de cargas -> Anexo III (fator R pode elevar ao V).",
+        "observacao": "Transporte de cargas -> Anexo III (não vai ao Anexo V).",
     },
     {
         "descricao": "Armazenamento e atividades auxiliares dos transportes",
@@ -271,7 +347,8 @@ GRUPOS_CNAE = [
                      "condomínio", "locacao", "locação", "aluguel"),
         "anexo": "III",
         "prioridade": 45,
-        "observacao": "Administração de imóveis -> Anexo III. Corretagem pode ir ao V.",
+        "observacao": "Administração de imóveis -> Anexo III. A corretagem de imóveis "
+                        "pode ir ao Anexo V pelo fator R.",
     },
     {
         "descricao": "Serviços profissionais, científicos e técnicos",
@@ -324,7 +401,8 @@ GRUPOS_CNAE = [
                      "idioma", "musica", "música", "dança", "danca"),
         "anexo": "III",
         "prioridade": 55,
-        "observacao": "Educação -> Anexo III (franquias/regulamentados podem ir ao V).",
+        "observacao": "Educação: ensino regular -> Anexo III; ensino livre/"
+                      "instrução (item 8.02 da LC 116) pode ir ao V pelo fator R.",
     },
     {
         "descricao": "Saúde humana, veterinária e serviços sociais",
@@ -359,7 +437,7 @@ GRUPOS_CNAE = [
                      "eletrônica", "celular", "computador", "maquina", "máquina"),
         "anexo": "III",
         "prioridade": 55,
-        "observacao": "Reparação/manutenção e beleza -> Anexo III (pode ir ao V pelo fator R).",
+        "observacao": "Reparação/manutenção e beleza -> Anexo III (não vai ao Anexo V).",
     },
     {
         "descricao": "Serviços de escritório, apoio administrativo e gestão",
@@ -373,7 +451,8 @@ GRUPOS_CNAE = [
         "anexo": "III",
         "prioridade": 55,
         "observacao": "Serviços de escritório e apoio administrativo -> Anexo III. "
-                      "Atividades intelectuais específicas podem ir ao V pelo fator R.",
+                      "Serviços intelectuais (quando for o caso) podem ir ao Anexo V "
+                      "pelo fator R.",
     },
 ]
 
@@ -522,10 +601,14 @@ def anexos_candidatos(cnae: str, descricao: str = "") -> list:
     _add(principal)
 
     # 2) Anexo V <-> Anexo III: a regra do fator R (folha >= 28% da RBT12).
-    #    Sempre que um deles for pertinente, o outro também é possível.
+    #    A bifurcação SÓ se aplica às atividades com previsão no Anexo V
+    #    (serviços do §5º-C da LC 123). Atividades exclusivamente do Anexo III
+    #    (educação, transporte, locação, academias, alimentação, reparação etc.)
+    #    NÃO migram para o Anexo V pelo fator R.
     if principal in ("III", "V"):
         _add("III")
-        _add("V")
+        if principal == "V" or _sujeito_anexo_v(cnae, texto):
+            _add("V")
 
     # 3) Comércio (I) x Indústria (II): "produz o que vende" alterna o anexo.
     #    Só libera o Anexo I quando há INDÍCIO REAL de comércio/revenda — seja
@@ -618,7 +701,7 @@ def _refinar_servico(anexo: str, texto_normalizado: str) -> str:
             return "IV"
 
     # Serviços que são Anexo III mesmo contendo palavras típicas do Anexo V
-    # (ex.: "treinamento" em educação, "manutenção" em reparação).
+    # (ex.: "manutenção" em reparação, "ensino regular" em educação).
     for palavra in _PALAVRAS_ANEXO_III_FORTE:
         if normalizar(palavra) in texto_normalizado:
             return "III"

@@ -222,6 +222,78 @@ def meses_para_competencia(competencia, data_ref=None) -> list:
 
 
 
+def janela_rbt12_com_deslize(faturamentos: dict, competencia=None,
+                             meses_futuros_qtd: int = 24, data_ref=None) -> dict:
+    """
+    Monta a janela de RBT12 (12 meses) partindo da competência e, se houver
+    meses à frente preenchidos, DESLIZA a janela para fechar no mês futuro
+    mais recente preenchido.
+
+    É a MESMA regra usada na tela do Anexo (modo simulação) — centralizada aqui
+    para que o Anexo e o Painel (dashboard) nunca divirjam.
+
+    Parâmetros:
+        faturamentos: dict {mes_ano: valor} com todos os valores gravados.
+        competencia:  competência salva ("YYYY-MM" ou vazio). Define a base.
+        meses_futuros_qtd: quantos meses à frente inspecionar além da base.
+        data_ref:     data de referência quando não há competência (default hoje).
+
+    Devolve um dict:
+        {
+          "meses_lista": [...],           # os 12 meses da janela aplicável
+          "valores_ordenados": [...],     # 12 valores na ordem de meses_lista
+          "slid": bool,                   # True se a janela deslizou
+          "janela_fim": "YYYY-MM",        # mês de fechamento da janela
+        }
+    """
+    faturamentos = faturamentos or {}
+    base = meses_para_competencia(competencia, data_ref=data_ref)
+
+    # REGRA DO SIMPLES (PGDAS-D): quando a competência é informada, ela MANDA.
+    # O RBT12 é a receita dos 12 meses ANTERIORES ao período de apuração, ou
+    # seja, a janela é FIXA e fecha no mês anterior à competência — o mês da
+    # própria competência NUNCA entra no cálculo. Nesse caso NÃO há deslize.
+    #
+    # O deslize só é aplicado no comportamento legado, quando NÃO há
+    # competência definida: aí a base cai no mês da máquina e, se houver meses
+    # à frente preenchidos, a janela desliza para fechar no mês futuro mais
+    # recente preenchido (permite projetar informando meses adiante).
+    competencia_informada = bool(normalizar_competencia(competencia))
+
+    if competencia_informada:
+        meses_lista = base
+        slid = False
+    else:
+        # Candidatos: os 12 meses da base + N meses futuros.
+        extras = meses_futuros(base, meses_futuros_qtd)
+        candidatos = base + extras
+
+        # Último mês (dentre os candidatos) que possui valor preenchido.
+        ultimo_preenchido = None
+        for m in candidatos:
+            if str(faturamentos.get(m["chave"], "")).strip() != "":
+                ultimo_preenchido = m["chave"]
+
+        if ultimo_preenchido and ultimo_preenchido > base[-1]["chave"]:
+            # Houve preenchimento à frente da base: desliza a janela para
+            # fechar no mês futuro mais recente preenchido.
+            fim = montar_mes(ultimo_preenchido)
+            chaves = [mes_deslocado(fim["chave"], -11 + i) for i in range(12)]
+            meses_lista = [montar_mes(c) for c in chaves]
+            slid = True
+        else:
+            meses_lista = base
+            slid = False
+
+    valores_ordenados = [faturamentos.get(m["chave"], "") for m in meses_lista]
+    return {
+        "meses_lista": meses_lista,
+        "valores_ordenados": valores_ordenados,
+        "slid": slid,
+        "janela_fim": meses_lista[-1]["chave"],
+    }
+
+
 def meses_para_rbt12(data_ref=None) -> list[dict]:
     """
     Gera a lista dos últimos 12 meses fechando no mês anterior ao mês

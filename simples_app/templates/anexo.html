@@ -71,7 +71,7 @@
           </tbody>
         </table>
       </div>
-      {% if modo_simulacao and meses_futuros %}
+      {% if meses_futuros %}
         <h3 class="titulo-secao">Meses à frente (projeção)</h3>
         <div class="tabela-scroll">
           <table class="meses-tabela">
@@ -93,9 +93,11 @@
       <p class="nota">
         A média é calculada como <strong>(12 × soma) ÷ quantidade de meses preenchidos</strong>,
         igual à planilha (célula C15). Deixe em branco os meses sem movimento.
+        Preencher um mês à frente <strong>desliza a janela</strong> de 12 meses para
+        fechar nele — é assim que você projeta o futuro.
         {% if modo_simulacao %}
-          Preencher um mês à frente <strong>desliza a janela</strong> de 12 meses para
-          fechar nele — é assim que você projeta o futuro.
+          No modo simulação nada é gravado; ao salvar aqui os valores são
+          salvos e o Painel passa a refletir a mesma janela.
         {% endif %}
       </p>
     </div>

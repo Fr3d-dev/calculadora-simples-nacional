@@ -442,8 +442,14 @@ def registrar_rotas(app: Flask):
             emp = empresa_ativa()
             row = db.obter_ou_criar_anexo(alvo["id"], anexo, empresa_id=emp["id"] if emp else None)
             valores = db.obter_faturamentos(row["id"])
-            meses_lista = calc.meses_para_rbt12()
-            rbt12 = calc.calcular_rbt12([valores.get(m["chave"], "") for m in meses_lista])
+            # Mesma regra da tela do Anexo: parte da competência salva e, se
+            # houver meses à frente preenchidos, desliza a janela de 12 meses
+            # para fechar no mês futuro mais recente. Centralizado em calc para
+            # que Painel e Anexo nunca divirjam.
+            competencia = row["competencia"] if "competencia" in row.keys() else ""
+            competencia = competencia or ""
+            janela = calc.janela_rbt12_com_deslize(valores, competencia)
+            rbt12 = calc.calcular_rbt12(janela["valores_ordenados"])
             fat_mes = row["faturamento_mes"] or 0
             resultado = calc.calcular(anexo, rbt12, fat_mes)
             resumos.append(resultado)
@@ -608,8 +614,8 @@ def registrar_rotas(app: Flask):
 
                 competencia = (request.form.get("competencia") or "").strip()
                 valores = db.obter_faturamentos(row["id"])
-                meses_lista = calc.meses_para_competencia(competencia)
-                rbt12 = calc.calcular_rbt12([valores.get(m["chave"], "") for m in meses_lista])
+                janela = calc.janela_rbt12_com_deslize(valores, competencia)
+                rbt12 = calc.calcular_rbt12(janela["valores_ordenados"])
                 fat_mes = request.form.get("faturamento_mes", "").strip()
                 db.salvar_dados_anexo(row["id"], rbt12=f"{rbt12:.2f}",
                                       faturamento_mes=fat_mes, competencia=competencia)
@@ -622,25 +628,39 @@ def registrar_rotas(app: Flask):
         valores = db.obter_faturamentos(row["id"])
         competencia = row["competencia"] if "competencia" in row.keys() else ""
         competencia = competencia or ""
-        meses_lista = calc.meses_para_competencia(competencia)
+        # Mesma regra do Painel: janela desliza se houver mês à frente preenchido.
+        janela = calc.janela_rbt12_com_deslize(valores, competencia)
+        meses_lista = janela["meses_lista"]
         # valores_ordenados: lista de 12 valores no mesmo order dos meses_lista
-        valores_ordenados = [valores.get(m["chave"], "") for m in meses_lista]
+        valores_ordenados = janela["valores_ordenados"]
         rbt12 = calc.calcular_rbt12(valores_ordenados)
         fat_mes = row["faturamento_mes"] or ""
         resultado = calc.calcular(anexo, rbt12, fat_mes)
         faixas = db.listar_tabelas_base(anexo)
+
+        # Meses à frente preenchíveis também no modo real (permite projetar
+        # informando um mês adiante; ao salvar, a janela de 12 meses desliza).
+        # Eles ficam após o fecho da janela aplicável; os já preenchidos que
+        # caíram DENTRO da janela aparecem na própria lista de 12 meses.
+        max_futuros = 6
+        meses_extras = calc.meses_futuros(meses_lista, max_futuros)
+        meses_futuros_lista = [
+            {**m, "valor": valores.get(m["chave"], "")}
+            for m in meses_extras
+            if m["chave"] not in {x["chave"] for x in meses_lista}
+        ]
 
         return render_template(
             "anexo.html",
             anexo=anexo,
             meses_lista=meses_lista,
             valores_ordenados=valores_ordenados,
-            meses_futuros=[],
+            meses_futuros=meses_futuros_lista,
             resultado=resultado,
             faixas=faixas,
             alvo=alvo,
             modo_simulacao=False,
-            max_futuros=6,
+            max_futuros=max_futuros,
             competencia=competencia,
         )
 
@@ -1106,7 +1126,7 @@ def registrar_rotas(app: Flask):
             empresa=None,
             acao="nova",
             grupos=cnaes.listar_grupos(),
-            anexos_simples=cnaes.ANEXOS_SIMPLES,
+            anexos_simples=list(ANEXOS_TODOS),
             pode_explicar_cnae=db.tem_permissao(g.usuario, "ver_explicacao_cnae"),
         )
 
@@ -1136,7 +1156,7 @@ def registrar_rotas(app: Flask):
             empresa=empresa,
             acao="editar",
             grupos=cnaes.listar_grupos(),
-            anexos_simples=cnaes.ANEXOS_SIMPLES,
+            anexos_simples=(anexos_identificados(empresa) or list(ANEXOS_TODOS)),
             pode_explicar_cnae=db.tem_permissao(g.usuario, "ver_explicacao_cnae"),
         )
 
@@ -1613,6 +1633,12 @@ def registrar_rotas(app: Flask):
             + [item["descricao"] for item in dados["cnaes_secundarios"][:5]]
         )
         dados["sugestao_anexo"] = cnaes.sugerir_anexo(dados["cnae_principal"], texto)
+        # Enriquece o payload com todos os anexos LEGALMENTE pertinentes (ex.:
+        # III<->V pelo fator R), sem alterar a função de sugestão. O formulário
+        # usa essa lista para restringir as opções de enquadramento.
+        dados["sugestao_anexo"]["anexos_candidatos"] = cnaes.anexos_candidatos(
+            dados["cnae_principal"], texto
+        )
 
         # Formata os CNAEs secundários para exibição no textarea.
         dados["cnaes_secundarios_texto"] = "\n".join(

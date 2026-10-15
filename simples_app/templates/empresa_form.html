@@ -147,7 +147,13 @@
         <label for="anexo_confirmado">Anexo definido</label>
         <select id="anexo_confirmado" name="anexo_confirmado">
           <option value="">— não definido —</option>
-          {% for a in anexos_simples %}
+          {# Preserva o anexo já confirmado mesmo que não esteja na lista
+             restrita de candidatos, para não perder dados ao editar. #}
+          {% set _opcoes = anexos_simples %}
+          {% if empresa and empresa.anexo_confirmado and empresa.anexo_confirmado not in _opcoes %}
+            {% set _opcoes = _opcoes + [empresa.anexo_confirmado] %}
+          {% endif %}
+          {% for a in _opcoes %}
           <option value="{{ a }}"
             {{ 'selected' if empresa and empresa.anexo_confirmado == a else '' }}>
             Anexo {{ a }}
@@ -253,8 +259,6 @@
 (function () {
   const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
   const PODE_EXPLICAR = {{ 'true' if pode_explicar_cnae else 'false' }};
-  const ANEXOS = ['I', 'II', 'III', 'IV', 'V'];
-
   const btn = document.getElementById('btn-quadro');
   const corpo = document.getElementById('quadro-cnae-corpo');
   const caixa = document.getElementById('quadro-cnae');
@@ -289,10 +293,12 @@
     }
 
     // Administrador: seletor editável, pré-selecionado com a sugestão automática.
-    // Quando há mais de um anexo possível, o primeiro (recomendado) vem marcado.
+    // As opções são SOMENTE os anexos pertinentes a este CNAE (candidatos),
+    // para não oferecer anexos incompatíveis (ex.: Anexo V em educação).
     var sugerido = cands.length ? cands[0] : linha.anexo;
+    var opcoesDisponiveis = cands.length ? cands : (linha.anexo ? [linha.anexo] : []);
     var opcoes = ['<option value="">— não definido —</option>']
-      .concat(ANEXOS.map(function (a) {
+      .concat(opcoesDisponiveis.map(function (a) {
         var sel = (sugerido === a) ? ' selected' : '';
         return '<option value="' + a + '"' + sel + '>Anexo ' + a + '</option>';
       }))
@@ -604,7 +610,24 @@
       }
       el('anexo_sugerido').value = sug.anexo || '';
       const selectAnexo = el('anexo_confirmado');
-      if (sug.anexo && !selectAnexo.value) selectAnexo.value = sug.anexo;
+      // Restringe as opções do select "Anexo definido" aos anexos pertinentes
+      // ao CNAE consultado (evita oferecer Anexo V a atividades incompatíveis).
+      const candsSug = sug.anexos_candidatos || (sug.anexo ? [sug.anexo] : []);
+      if (candsSug.length) {
+        const atual = selectAnexo.value;
+        selectAnexo.innerHTML = '<option value="">— não definido —</option>' +
+          candsSug.map(function (a) {
+            return '<option value="' + a + '">Anexo ' + a + '</option>';
+          }).join('');
+        // Mantém a escolha anterior se ainda for válida; senão usa a sugestão.
+        if (atual && candsSug.indexOf(atual) !== -1) {
+          selectAnexo.value = atual;
+        } else {
+          selectAnexo.value = sug.anexo || '';
+        }
+      } else if (sug.anexo && !selectAnexo.value) {
+        selectAnexo.value = sug.anexo;
+      }
 
       // Painel com informações cadastrais.
       const simples = dados.opcao_pelo_simples;
