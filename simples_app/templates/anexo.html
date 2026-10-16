@@ -24,12 +24,25 @@
   <div>
     <strong>🧪 Modo simulação</strong>
     <span>Você pode digitar qualquer mês — inclusive meses à frente — para projetar o
-    RBT12. Nada aqui é gravado: os dados reais importados do extrato permanecem intactos.</span>
+    RBT12. Nada aqui é gravado no banco: os dados reais importados do extrato permanecem
+    intactos. Enquanto a simulação estiver ativa, o Painel reflete estes valores.</span>
   </div>
   <form method="post" style="margin:0">
     <input type="hidden" name="_acao" value="sair_simulacao">
     <button type="submit" class="btn secundario">Sair da simulação</button>
   </form>
+</div>
+{% elif tem_simulacao %}
+<div class="banner-simulacao">
+  <div>
+    <strong>🧪 Simulação ativa</strong>
+    <span>Existe uma simulação em andamento para este anexo. O Painel está refletindo
+    os valores simulados. Entre no modo simulação para revisá-los ou sair dele.</span>
+  </div>
+  <a class="btn secundario"
+     href="{{ url_for('anexo_view', anexo=anexo, usuario_id=alvo.id, modo='simulacao') }}">
+    Revisar simulação
+  </a>
 </div>
 {% endif %}
 
@@ -96,8 +109,9 @@
         Preencher um mês à frente <strong>desliza a janela</strong> de 12 meses para
         fechar nele — é assim que você projeta o futuro.
         {% if modo_simulacao %}
-          No modo simulação nada é gravado; ao salvar aqui os valores são
-          salvos e o Painel passa a refletir a mesma janela.
+          No modo simulação nada é gravado no banco; os valores ficam na sessão
+          e o Painel passa a refletir esta mesma janela enquanto a simulação
+          estiver ativa.
         {% endif %}
       </p>
     </div>

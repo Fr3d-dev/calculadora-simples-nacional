@@ -219,6 +219,38 @@ def _chave_simulacao(anexo_id) -> str:
     return f"simulacao_anexo_{anexo_id}"
 
 
+def _valores_com_simulacao(anexo_id, valores_reais: dict) -> dict:
+    """Mescla os valores REAIS com os valores de uma eventual simulação ativa.
+
+    A simulação é sobreposta mês a mês: nos meses simulados o valor simulado
+    assume no lugar do real; nos demais, vale o valor real (banco). Isso faz o
+    Painel refletir exatamente a mesma janela de RBT12 que o usuário vê na tela
+    de simulação — SEM gravar nada no banco (ao sair da simulação, tudo volta).
+
+    A simulação guarda também chaves internas (``_competencia``,
+    ``_faturamento_mes``), que contêm ``_`` e começam fora de "mes_"; elas são
+    ignoradas aqui para não contaminar os valores dos meses.
+    """
+    sim = session.get(_chave_simulacao(anexo_id), {}) or {}
+    if not sim:
+        return valores_reais
+
+    mesclado = dict(valores_reais)
+    for chave, valor in sim.items():
+        if chave.startswith("_"):
+            continue  # metadados internos da simulação
+        texto = str(valor).strip()
+        mesclado[chave] = texto
+    return mesclado
+
+
+def _competencia_efetiva(anexo_id, competencia_real):
+    """Competência vigente para os cálculos: a da simulação (se houver) ou a real."""
+    sim = session.get(_chave_simulacao(anexo_id), {}) or {}
+    comp_sim = str(sim.get("_competencia", "")).strip()
+    return comp_sim or (competencia_real or "")
+
+
 
 def _casar_empresa_extrato(dados_extrato: dict, empresas) -> Optional[object]:
     """
@@ -421,6 +453,7 @@ def registrar_rotas(app: Flask):
     def dashboard():
         usuario = g.usuario
         resumos = []
+        simulacao_ativa = False
         if usuario["is_admin"]:
             id_alvo = request.args.get("usuario_id", type=int) or usuario["id"]
         else:
@@ -441,18 +474,25 @@ def registrar_rotas(app: Flask):
         for anexo in anexos_dashboard:
             emp = empresa_ativa()
             row = db.obter_ou_criar_anexo(alvo["id"], anexo, empresa_id=emp["id"] if emp else None)
-            valores = db.obter_faturamentos(row["id"])
+            # Valores reais do banco + eventuais valores de simulação ativa.
+            # A simulação é sobreposta mês a mês (sem gravar no banco), de modo
+            # que o Painel reflete o que o usuário vê na tela de simulação.
+            valores = _valores_com_simulacao(row["id"], db.obter_faturamentos(row["id"]))
             # Mesma regra da tela do Anexo: parte da competência salva e, se
             # houver meses à frente preenchidos, desliza a janela de 12 meses
             # para fechar no mês futuro mais recente. Centralizado em calc para
             # que Painel e Anexo nunca divirjam.
             competencia = row["competencia"] if "competencia" in row.keys() else ""
-            competencia = competencia or ""
+            competencia = _competencia_efetiva(row["id"], competencia)
             janela = calc.janela_rbt12_com_deslize(valores, competencia)
             rbt12 = calc.calcular_rbt12(janela["valores_ordenados"])
             fat_mes = row["faturamento_mes"] or 0
             resultado = calc.calcular(anexo, rbt12, fat_mes)
             resumos.append(resultado)
+            # Se qualquer um dos anexos exibidos tiver simulação ativa na
+            # sessão, avisamos a interface (o Painel está refletindo simulação).
+            if session.get(_chave_simulacao(row["id"])):
+                simulacao_ativa = True
 
         total_das = sum(r["das"] for r in resumos)
         total_fat_mes = sum(r["faturamento_mes"] for r in resumos)
@@ -472,6 +512,7 @@ def registrar_rotas(app: Flask):
             alvo=alvo,
             anexos=anexos_dashboard,
             sem_anexo=not anexos_dashboard,
+            simulacao_ativa=simulacao_ativa,
         )
 
     # ------------------------------ Anexos -----------------------------------
@@ -662,6 +703,7 @@ def registrar_rotas(app: Flask):
             modo_simulacao=False,
             max_futuros=max_futuros,
             competencia=competencia,
+            tem_simulacao=bool(session.get(_chave_simulacao(row["id"]))),
         )
 
     # ----------------------- Cálculo dinâmico (AJAX) --------------------------
