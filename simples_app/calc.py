@@ -225,16 +225,21 @@ def meses_para_competencia(competencia, data_ref=None) -> list:
 def janela_rbt12_com_deslize(faturamentos: dict, competencia=None,
                              data_ref=None) -> dict:
     """
-    Monta a janela de RBT12 (12 meses) aplicando a prioridade das regras:
+    Monta a janela de RBT12 (12 meses) com DESLIZE para meses futuros.
 
-      1) Se *competencia* for informada (ex.: "2026-08"), ela MANDA — a janela
-         fecha no mês ANTERIOR à competência (regra PGDAS-D). NUNCA desliza.
-      2) Se *competencia* estiver vazia/inválida, usa o MÊS DA MÁQUINA
-         (*data_ref*, default = hoje), fechando no mês anterior. Também NÃO
-         desliza — o mês da máquina é o teto.
+    Regra (única para Painel, Anexo real e simulação):
 
-    É a MESMA regra usada na tela do Anexo (modo simulação) e no Painel
-    (dashboard), centralizada aqui para que os dois nunca divirjam.
+      1) Monta a janela BASE de 12 meses fechando no mês ANTERIOR à
+         *competencia* (se informada; regra PGDAS-D) ou no mês anterior ao de
+         *data_ref* (default = hoje), quando não há competência.
+      2) Se o usuário preencheu algum mês À FRENTE do fim da janela base
+         (mês futuro preenchido), a janela DESLIZA para fechar no mês futuro
+         preenchido MAIS RECENTE. Ou seja: os 12 meses passam a terminar
+         naquele mês preenchido, e o excedente fica de fora.
+
+    Ex.: competência "2026-08" -> janela base ago/2025..jul/2026. Se houver
+    faturamento preenchido em set/2026, a janela desliza para
+    set/2025..ago/2026 (fecha no mês futuro mais recente preenchido).
 
     Parâmetros:
         faturamentos: dict {mes_ano: valor} com todos os valores gravados.
@@ -245,31 +250,35 @@ def janela_rbt12_com_deslize(faturamentos: dict, competencia=None,
         {
           "meses_lista": [...],           # os 12 meses da janela aplicável
           "valores_ordenados": [...],     # 12 valores na ordem de meses_lista
-          "slid": bool,                   # sempre False (mantido por compatibilidade)
+          "slid": bool,                   # True se houve deslize
           "janela_fim": "YYYY-MM",        # mês de fechamento da janela
         }
     """
     faturamentos = faturamentos or {}
     base = meses_para_competencia(competencia, data_ref=data_ref)
 
-    # REGRA DO SIMPLES (PGDAS-D): quando a competência é informada, ela MANDA.
-    # O RBT12 é a receita dos 12 meses ANTERIORES ao período de apuração, ou
-    # seja, a janela é FIXA e fecha no mês anterior à competência — o mês da
-    # própria competência NUNCA entra no cálculo. Nesse caso NÃO há deslize.
-    #
-    # PRIORIDADE DAS REGRAS:
-    #   1) Se houver competência informada (digitada/salva), ELA MANDA — janela
-    #      fixa fechando no mês anterior à competência (regra PGDAS-D).
-    #   2) Se NÃO houver competência, usa o MÊS DA MÁQUINA (regra original do
-    #      sistema), fechando no mês anterior a hoje. NÃO desliza mais para
-    #      meses futuros preenchidos: o mês da máquina é o teto.
-    competencia_informada = bool(normalizar_competencia(competencia))
+    # Fim da janela base (mês de fechamento).
+    fim_base = base[-1]["chave"]
 
-    if competencia_informada:
-        meses_lista = base
-        slid = False
+    # Procura o mês MAIS RECENTE com valor preenchido (não vazio) em todo o
+    # histórico. Se ele estiver À FRENTE do fim da janela base, a janela
+    # desliza para fechar nele.
+    ultimo_preenchido = None
+    for chave, valor in faturamentos.items():
+        if valor is None or str(valor).strip() == "":
+            continue
+        chave_norm = normalizar_competencia(chave)
+        if not chave_norm:
+            continue
+        if ultimo_preenchido is None or chave_norm > ultimo_preenchido:
+            ultimo_preenchido = chave_norm
+
+    if ultimo_preenchido and ultimo_preenchido > fim_base:
+        # Desliza: a janela passa a fechar no mês futuro preenchido mais recente.
+        meses_lista = [montar_mes(mes_deslocado(ultimo_preenchido, -11 + i), indice=i + 1)
+                       for i in range(12)]
+        slid = True
     else:
-        # Sem competência: base fixa no mês da máquina (nenhum deslize).
         meses_lista = base
         slid = False
 
