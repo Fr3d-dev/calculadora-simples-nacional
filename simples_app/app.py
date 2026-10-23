@@ -1986,9 +1986,13 @@ def bootstrap():
 
 app = create_app()
 
+# Roda também no import (WSGI/produção), não só em `python app.py`: sem isso o
+# banco nunca é criado/migrado quando o app sobe via wsgi.py. É idempotente —
+# o schema usa CREATE TABLE IF NOT EXISTS e os seeds só populam tabela vazia.
+bootstrap()
+
 
 if __name__ == "__main__":
-    bootstrap()
     # Debug desligado por padrão. Para desenvolvimento, defina a variável de
     # ambiente SN_DEBUG=1 antes de executar (nunca use debug em produção).
     debug = os.environ.get("SN_DEBUG", "").strip() in ("1", "true", "True", "yes")
