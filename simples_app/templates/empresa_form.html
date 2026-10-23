@@ -412,17 +412,14 @@
 
     var itens = dados.itens_lc116 || [];
     if (itens.length) {
-      html += '<div class="exp-subtitulo">Detalhamento pela LC 116/2003</div>';
+      html += '<div class="exp-subtitulo">Item da LC 116/2003</div>';
       html += '<table class="exp-tabela"><thead><tr>' +
-              '<th>Item</th><th>Situação</th><th>Tributo</th><th>Enquadramento</th>' +
+              '<th>Item</th><th>Descrição</th><th>Anexo</th>' +
               '</tr></thead><tbody>';
       itens.forEach(function (it) {
-        var trib = (it.tributo || '').toUpperCase();
-        var cls = trib === 'ICMS' ? 'exp-trib-icms' : 'exp-trib-iss';
         html += '<tr>' +
           '<td>' + escapar(it.item) + '</td>' +
           '<td>' + escapar(it.descricao) + '</td>' +
-          '<td><span class="' + cls + '">' + escapar(it.tributo) + '</span></td>' +
           '<td>' + escapar(it.anexo) + '</td>' +
         '</tr>';
       });
@@ -473,13 +470,20 @@
     if (conteudo.getAttribute('data-carregado') === '1') return;
     conteudo.innerHTML = '<div class="texto-suave">Carregando explicação…</div>';
 
+    // A análise é pela DESCRIÇÃO COMPLETA: principal + secundários, lidos
+    // dos campos do formulário neste momento.
+    var campoPrincipal = document.getElementById('cnae_descricao');
+    var campoSecundarios = document.getElementById('cnaes_secundarios');
+
     try {
       var resp = await fetch('{{ url_for("api_cnae_explicar") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cnae: botao.getAttribute('data-cnae') || '',
-          descricao: botao.getAttribute('data-descricao') || ''
+          descricao: botao.getAttribute('data-descricao') || '',
+          cnae_descricao: campoPrincipal ? campoPrincipal.value.trim() : '',
+          cnaes_secundarios: campoSecundarios ? campoSecundarios.value : ''
         })
       });
       var dados = await resp.json();

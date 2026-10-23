@@ -1,469 +1,90 @@
 """
-Base de CNAEs e regras de enquadramento no Simples Nacional.
+Base de CNAEs e enquadramento no Simples Nacional.
 
-Objetivo: permitir que, ao cadastrar a empresa, o usuário informe o CNAE
-principal e o sistema sugira automaticamente o Anexo do Simples Nacional
-(I, II, III, IV ou V) aplicável à atividade.
+O ENQUADRAMENTO agora é feito pelo motor legal em `enquadramento.py`
+(tabela de classes de CNAE + itens da LC 116/2003). Este módulo mantém:
 
-Observações importantes (não substituem a análise de um contador):
-  - O enquadramento depende do CNAE principal E das atividades secundárias,
-    do faturamento e de fatores como folha de salários e ISS/ICMS.
-  - Serviços do Anexo IV e V não têm CST/CSOSN como os demais; e o Anexo V
-    depende do fator R = folha 12m / RBT12 (>= 28% migra para o Anexo III).
-  - Este módulo trabalha por heurística de palavras-chave sobre a descrição
-    do CNAE, o que cobre a grande maioria dos casos práticos.
+  - helpers de uso geral (apenas_digitos, normalizar, formatar_cnae);
+  - `sugerir_anexo()` / `anexos_candidatos()`  -> delegam ao motor;
+  - `listar_grupos()`                          -> resumo por divisão de CNAE
+                                                  (tabela exibida em Empresas);
+  - `anexo_usa_fator_r()` / `calcular_fator_r()` (regra do Fator "r").
 
-Estrutura:
-  GRUPOS_CNAE -> lista de grupos com faixa de código, palavras-chave e anexo.
-  sugerir_anexo() -> função principal de enquadramento por CNAE.
+A heurística antiga por palavras-chave foi removida: ela classificava
+atividade pelo texto da descrição e gerava enquadramentos indevidos (ex.:
+"Restaurantes e similares" caía no Anexo I por acaso, "instalação de
+esquadrias" em CNAE de comércio virava Anexo IV etc.).
+
+Observações:
+  - O enquadramento definitivo depende do CNAE principal E das atividades
+    secundárias, do faturamento, da folha e do destino do produto/serviço.
+    Este módulo é orientativo e não substitui o contador.
+  - Backup da versão anterior: `cnaes.py.bak_antes_enquadramento`.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Palavras-chave de apoio
-# ---------------------------------------------------------------------------
-
-# Palavras que indicam comércio (Anexo I) mesmo quando o código é 47xx.
-_PALAVRAS_COMERCIO = (
-    "comercio", "comércio", "loja", "mercado", "mercearia", "venda", "varejo",
-    "revenda", "papelaria", "farmácia", "farmacia", "supermercado", "magazine",
-    "boutique", "autopecas", "autopeças", "material de construcao",
-    "material de construção", "livraria", "floricultura", "otic", "ótic",
-    "joalheria", "bicicleta", "vestuario", "vestuário", "calcados", "calçados",
-    "eletrodomesticos", "eletrodomésticos", "inflamaveis", "inflamáveis",
-)
-
-# Palavras que indicam indústria / industrialização (Anexo II).
-_PALAVRAS_INDUSTRIA = (
-    "fabricacao", "fabricação", "fabrica", "fábrica", "industria", "indústria",
-    "industrializacao", "industrialização", "producao", "produção", "confecao",
-    "confecção", "beneficiamento", "montagem de", "usinagem", "solda",
-    "metalurgia", "marcenaria", "panificacao", "panificação", "abate",
-    "laticinio", "laticínio", "alimentos", "mobiliario", "mobiliário",
-)
-
-# Palavras que indicam prestação de serviços (Anexo III ou V, conforme fator R).
-_PALAVRAS_SERVICOS = (
-    "servico", "serviço", "servicos", "serviços", "assessoria", "consultoria",
-    "contabilidade", "contabil", "contábil", "advocacia", "advogado",
-    "engenharia", "arquitetura", "publicidade", "propaganda", "marketing",
-    "informatica", "informática", "software", "desenvolvimento de",
-    "manutencao", "manutenção", "reparacao", "reparação", "instalacao",
-    "instalação", "treinamento", "ensino", "educacao", "educação", "escola",
-    "clinica", "clínica", "medicina", "odontologia", "odontológic",
-    "veterinaria", "veterinária", "fisioterapia", "nutricao", "nutrição",
-    "psicologia", "laboratorio", "laboratório", "analises", "análises",
-    "academia", "fitness", "estetica", "estética", "barbearia", "cabeleireiro",
-    "transporte", "fretamento", "taxis", "táxi", "hotelaria", "hospedagem",
-    "turismo", "agenciamento", "representacao", "representação", "locacao",
-    "locação", "seguros", "corretagem", "auditoria", "gestao", "gestão",
-)
-
-# Serviços que tipicamente vão para o Anexo V (sujeitos ao fator R).
-# Obs.: "ensino" NÃO consta aqui — a educação é tratada por
-# _PALAVRAS_ENSINO_LIVRE (ensino livre/instrução -> V) e o ensino regular é
-# exclusivamente Anexo III.
-_PALAVRAS_ANEXO_V = (
-    "auditoria", "jornalismo", "publicidade", "propaganda", "engenharia",
-    "arquitetura", "medicina", "odontologia", "advocacia", "contabilidade",
-    "consultoria", "assessoria", "programacao", "programação", "software",
-    "desenvolvimento de sistemas", "design", "representacao comercial",
-    "representação comercial", "corretagem",
-    "gestao", "gestão", "marketing", "fisioterapia", "nutricao", "nutrição",
-    "psicologia", "veterinaria", "veterinária", "enfermagem", "farmácia",
-    "analises clinicas", "análises clínicas", "laboratorio", "laboratório",
-)
-
-# Serviços que vão para o Anexo IV (tributação separada de ISS/ICMS/CPP).
-_PALAVRAS_ANEXO_IV = (
-    "construcao civil", "construção civil", "obra", "obras", "reforma",
-    "demolicao", "demolição", "terraplenagem", "pintura de", "instalacao de",
-    "instalação de", "limpeza", "conservacao", "conservação", "vigilancia",
-    "vigilância", "seguranca patrimonial", "segurança patrimonial", "controle de pragas",
-    "dedetizacao", "dedetização", "paisagismo", "jardinagem",
-)
-
-# Serviços que permanecem no Anexo III mesmo contendo palavras típicas do V.
-# Ex.: "treinamento" (educação) e "manutencao" (reparação) são Anexo III.
-#
-# ATENÇÃO: "ensino" e "treinamento" também aparecem no Anexo V quando se trata
-# de ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116/2003), que é hipótese legal
-# de fator R (§5º-B, I, da LC 123/2006). A palavra "treinamento" foi por isso
-# REMOVIDA desta lista; a bifurcação III<->V da educação é decidida em
-# _sujeito_anexo_v()/_refinar_servico() com base em _PALAVRAS_ENSINO_LIVRE.
-_PALAVRAS_ANEXO_III_FORTE = (
-    "ensino regular", "pre-escola", "pré-escola", "ensino fundamental",
-    "ensino medio", "ensino médio", "educacao infantil", "educação infantil",
-    "educacao basica", "educação básica", "ensino superior", "universidade",
-    "graduacao", "graduação",
-    "reparacao", "reparação", "manutencao", "manutenção", "conserto",
-    "restaurante", "lanchonete", "padaria", "academia", "fitness",
-    "transporte", "locacao", "locação", "aluguel", "estacionamento",
-    "hotel", "hospedagem", "fisioterapia", "estetica", "estética",
-    "barbearia", "cabeleireiro",
-)
-
-# ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116/2003).
-# Este sim PODE ser tributado no Anexo V pelo fator R (§5º-B, I, da LC
-# 123/2006). Diferente do ENSINO REGULAR (item 8.01), que é exclusivamente
-# Anexo III. Ex.: curso de idiomas, treinamento gerencial, instrutoria.
-_PALAVRAS_ENSINO_LIVRE = (
-    "ensino livre", "curso livre", "instrucao", "instrução",
-    "treinamento", "capacitacao", "capacitação", "instrutor",
-    "orientacao pedagogica", "orientação pedagógica", "idioma",
-    "musica", "música", "danca", "dança", "profissionalizante",
-)
-
-# Divisões/grupos de CNAE cujas atividades PODEM ser tributadas no Anexo V
-# (serviços do §5º-C do art. 18 da LC 123/2006), sujeitas ao fator R. Só para
-# estas faixas faz sentido liberar a bifurcação Anexo III <-> Anexo V.
-#
-# Atividades que NÃO aparecem aqui são exclusivamente Anexo III (ex.: educação
-# 85xx, transporte 49xx/52xx, locação de bens móveis 77xx, academias/esporte
-# 93xx, reparação/manutenção e beleza 95xx/96xx, alimentação 56xx). Liberar o
-# Anexo V para elas (como fazia a regra genérica anterior) gerava enquadramento
-# indevido — por exemplo a educação pré-escola aparecendo como Anexo V.
-_PREFIXOS_ANEXO_V = (
-    # TI e software
-    "62", "63",
-    # Serviços profissionais, científicos e técnicos (engenharia, arquitetura,
-    # contabilidade, advocacia, publicidade/marketing, design, medicina etc.)
-    "69", "70", "71", "72", "73", "74", "75",
-    # Produção audiovisual / edição / rádio e TV
-    "58", "59", "60",
-    # Saúde humana, veterinária e serviços sociais
-    "86", "87", "88",
-)
-
-
-def _sujeito_anexo_v(cnae: str, texto_normalizado: str) -> bool:
-    """
-    Indica se a atividade é tipicamente passível de tributação no Anexo V
-    (serviços do §5º-C), o que autoriza a bifurcação III<->V pelo fator R.
-
-    Critério principal: prefixo do CNAE nas faixas do Anexo V. Reforço:
-    palavras-chave de serviços intelectuais na descrição — ignorando palavras
-    que também caracterizam o Anexo III (ex.: "ensino"/"treinamento"), para não
-    liberar o V a atividades exclusivas do III.
-    """
-    digitos = apenas_digitos(cnae)
-    if any(digitos.startswith(p) for p in _PREFIXOS_ANEXO_V):
-        return True
-    alvo = texto_normalizado
-
-    # EDUCAÇÃO (divisão 85): caso especial e mais sensível.
-    #   - ENSINO LIVRE / INSTRUÇÃO (item 8.02 da LC 116) -> pode ir ao V
-    #     (fator R, §5º-B, I, da LC 123/2006).
-    #   - ENSINO REGULAR (item 8.01) -> SOMENTE Anexo III.
-    if digitos.startswith("85"):
-        return any(normalizar(p) in alvo for p in _PALAVRAS_ENSINO_LIVRE)
-
-    # Palavras-chave que também caracterizam o Anexo III não devem, por si só,
-    # sugerir o V (ex.: "academia", "transporte").
-    exclusivo_iii = {normalizar(p) for p in _PALAVRAS_ANEXO_III_FORTE}
-    for palavra in _PALAVRAS_ANEXO_V:
-        p = normalizar(palavra)
-        if p and p in alvo and p not in exclusivo_iii:
-            return True
-    return False
+import enquadramento
+from enquadramento import MOTOR, formatar_cnae
 
 
 # ---------------------------------------------------------------------------
-# Grupos de CNAE -> Anexo sugerido
+# Nomes das divisões (para a tabela informativa de "grupos")
 # ---------------------------------------------------------------------------
-# 'prefixos' identifica divisões/grupos da CNAE (2 a 4 dígitos).
-# 'palavras' refina o enquadramento dentro do grupo.
-# 'prioridade' desempata: quanto maior, mais forte a sugestão.
 
-GRUPOS_CNAE = [
-    {
-        "descricao": "Agricultura, pecuária, pesca e extrativismo",
-        "prefixos": ("01", "02", "03", "05"),
-        "palavras": ("cultivo", "agricultura", "pecuaria", "pecuária", "criacao",
-                     "criação", "pesca", "extracao", "extração", "silvicultura",
-                     "horticultura", "fruticultura"),
-        "anexo": "I",
-        "prioridade": 40,
-        "observacao": "Comércio/industrialização de produção própria costuma enquadrar no Anexo I.",
-    },
-    {
-        "descricao": "Indústria de alimentos, bebidas e fumo",
-        "prefixos": ("10", "11", "12"),
-        "palavras": ("fabricacao", "fabricação", "abate", "laticinio", "laticínio",
-                     "panificacao", "panificação", "usina", "bebida", "moagem"),
-        "anexo": "II",
-        "prioridade": 60,
-        "observacao": "Industrialização por conta própria -> Anexo II.",
-    },
-    {
-        "descricao": "Indústria têxtil, vestuário, couro e calçados",
-        "prefixos": ("13", "14", "15"),
-        "palavras": ("fabricacao", "fabricação", "confecao", "confecção",
-                     "beneficiamento", "tecelagem", "fiacao", "fiação", "curtume"),
-        "anexo": "II",
-        "prioridade": 60,
-        "observacao": "Industrialização por conta própria -> Anexo II.",
-    },
-    {
-        "descricao": "Indústria de madeira, papel, celulose e mobiliário",
-        "prefixos": ("16", "17", "18", "31"),
-        "palavras": ("fabricacao", "fabricação", "serraria", "marcenaria",
-                     "moveis", "móveis", "celulose", "beneficiamento"),
-        "anexo": "II",
-        "prioridade": 60,
-        "observacao": "Marcenaria com fabricação própria -> Anexo II.",
-    },
-    {
-        "descricao": "Indústria química, farmacêutica, borracha, plástico e metalurgia",
-        "prefixos": ("19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30"),
-        "palavras": ("fabricacao", "fabricação", "refino", "metalurgia",
-                     "usinagem", "fundicao", "fundição", "solda", "estamparia"),
-        "anexo": "II",
-        "prioridade": 60,
-        "observacao": "Industrialização -> Anexo II. Revenda de terceiros pode ser Anexo I.",
-    },
-    {
-        "descricao": "Eletricidade, água, esgoto e coleta de resíduos",
-        "prefixos": ("35", "36", "37", "38"),
-        "palavras": ("energia", "agua", "água", "esgoto", "residuos", "resíduos",
-                     "coleta", "tratamento", "saneamento"),
-        "anexo": "II",
-        "prioridade": 45,
-        "observacao": "Serviços industriais de utilidade pública -> Anexo II.",
-    },
-    {
-        "descricao": "Construção civil e obras",
-        "prefixos": ("41", "42", "43"),
-        "palavras": ("construcao", "construção", "obra", "edificacao", "edificação",
-                     "infraestrutura", "demolicao", "demolição", "instalacao",
-                     "instalação", "eletrica", "elétrica", "hidraulica", "hidráulica",
-                     "acabamento", "reforma", "pintura"),
-        "anexo": "IV",
-        "prioridade": 70,
-        "observacao": "Construção civil -> Anexo IV (tributos separados, CPP fora do DAS).",
-    },
-    {
-        "descricao": "Comércio de veículos e peças",
-        "prefixos": ("45",),
-        "palavras": ("comercio", "comércio", "revenda", "pecas", "peças",
-                     "autopecas", "autopeças", "concessionaria", "concessionária",
-                     "motociclet", "venda"),
-        "anexo": "I",
-        "prioridade": 55,
-        "observacao": "Revenda de mercadorias -> Anexo I. Manutenção e reparação de "
-                      "veículos (45.20-0) são serviços -> Anexo III.",
-    },
-    {
-        "descricao": "Comércio por atacado",
-        "prefixos": ("46",),
-        "palavras": ("atacado", "atacadista", "comercio", "comércio", "distribuicao",
-                     "distribuição", "revenda"),
-        "anexo": "I",
-        "prioridade": 55,
-        "observacao": "Comércio atacadista -> Anexo I.",
-    },
-    {
-        "descricao": "Comércio varejista",
-        "prefixos": ("47",),
-        "palavras": _PALAVRAS_COMERCIO,
-        "anexo": "I",
-        "prioridade": 55,
-        "observacao": "Comércio varejista -> Anexo I. Se produzir o que vende, avaliar Anexo II.",
-    },
-    {
-        "descricao": "Transporte terrestre de passageiros e fretamento",
-        "prefixos": ("49",),
-        "palavras": ("passageiro", "fretamento", "taxi", "táxi", "onibus", "ônibus",
-                     "van", "escolar", "coletivo", "transporte de passageiro"),
-        "anexo": "III",
-        "prioridade": 65,
-        "observacao": "Transporte de passageiros -> Anexo III (não vai ao Anexo V).",
-    },
-    {
-        "descricao": "Transporte de cargas",
-        "prefixos": ("49",),
-        "palavras": ("carga", "cargueiro", "mudanca", "mudança", "frete", "transporte de carga"),
-        "anexo": "III",
-        "prioridade": 65,
-        "observacao": "Transporte de cargas -> Anexo III (não vai ao Anexo V).",
-    },
-    {
-        "descricao": "Armazenamento e atividades auxiliares dos transportes",
-        "prefixos": ("52",),
-        "palavras": ("armazenamento", "deposito", "depósito", "logistica", "logística",
-                     "estacionamento", "movimentacao", "movimentação"),
-        "anexo": "III",
-        "prioridade": 45,
-        "observacao": "Atividade auxiliar de transporte -> Anexo III.",
-    },
-    {
-        "descricao": "Alimentação: restaurantes, bares, lanchonetes e similares",
-        "prefixos": ("56",),
-        "palavras": ("restaurante", "lanchonete", "bar", "bar", "cafe", "café",
-                     "pizzaria", "hamburgueria", "churrascaria", "alimentacao",
-                     "alimentação", "confeitaria", "padaria", "food", "delivery",
-                     "fornecimento de alimentos", "marmita", "panqueca"),
-        "anexo": "I",
-        "prioridade": 75,
-        "observacao": "Restaurantes e similares -> Anexo I (CNAE 56.11-2 e correlatos).",
-    },
-    {
-        "descricao": "Edição, gravação, rádio e TV",
-        "prefixos": ("58", "59", "60"),
-        "palavras": ("edicao", "edição", "gravacao", "gravação", "radio", "rádio",
-                     "televisao", "televisão", "musica", "música", "filme", "streaming"),
-        "anexo": "V",
-        "prioridade": 55,
-        "observacao": "Produção audiovisual -> Anexo V (fator R pode mover para III).",
-    },
-    {
-        "descricao": "Telecomunicações",
-        "prefixos": ("61",),
-        "palavras": ("telecomunicacao", "telecomunicação", "telefonia", "internet",
-                     "provedor", "comunicacao", "comunicação"),
-        "anexo": "III",
-        "prioridade": 50,
-        "observacao": "Telecomunicações -> Anexo III.",
-    },
-    {
-        "descricao": "Tecnologia da informação e software",
-        "prefixos": ("62", "63"),
-        "palavras": ("software", "programa", "sistema", "ti", "informatica",
-                     "informática", "dados", "hospedagem", "suporte tecnico",
-                     "suporte técnico", "desenvolvimento", "web", "app"),
-        "anexo": "V",
-        "prioridade": 70,
-        "observacao": "TI e software -> Anexo V, mas com folha >= 28% da RBT12 vão para o Anexo III.",
-    },
-    {
-        "descricao": "Serviços financeiros, seguros e imobiliários",
-        "prefixos": ("64", "65", "66", "68"),
-        "palavras": ("financeir", "seguro", "corretora", "corretagem", "imobiliaria",
-                     "imobiliária", "incorporacao", "incorporação", "arrendamento",
-                     "administracao de bens", "administração de bens", "condominio",
-                     "condomínio", "locacao", "locação", "aluguel"),
-        "anexo": "III",
-        "prioridade": 45,
-        "observacao": "Administração de imóveis -> Anexo III. A corretagem de imóveis "
-                        "pode ir ao Anexo V pelo fator R.",
-    },
-    {
-        "descricao": "Serviços profissionais, científicos e técnicos",
-        "prefixos": ("69", "70", "71", "72", "73", "74", "75"),
-        "palavras": ("advocacia", "advogado", "contabilidade", "contabil", "contábil",
-                     "auditoria", "consultoria", "assessoria", "engenharia", "arquitetura",
-                     "publicidade", "propaganda", "marketing", "design", "pesquisa",
-                     "veterinaria", "veterinária", "laboratorio", "laboratório",
-                     "medicina", "odontologia", "psicologia", "nutricao", "nutrição",
-                     "fisioterapia", "analises", "análises", "diagnostico", "diagnóstico"),
-        "anexo": "V",
-        "prioridade": 70,
-        "observacao": "Serviços intelectuais -> Anexo V; com folha >= 28% da RBT12, Anexo III.",
-    },
-    {
-        "descricao": "Locação de máquinas, equipamentos e objetos pessoais",
-        "prefixos": ("77",),
-        "palavras": ("locacao", "locação", "aluguel", "arrendamento de maquinas",
-                     "arrendamento de máquinas", "equipamento"),
-        "anexo": "III",
-        "prioridade": 45,
-        "observacao": "Locação de bens móveis (sem cessão de mão de obra) -> Anexo III.",
-    },
-    {
-        "descricao": "Vigilância, segurança e investigação",
-        "prefixos": ("80",),
-        "palavras": ("vigilancia", "vigilância", "seguranca", "segurança",
-                     "patrimonial", "monitoramento", "escolta", "investigacao",
-                     "investigação", "rastreamento"),
-        "anexo": "IV",
-        "prioridade": 80,
-        "observacao": "Vigilância e segurança patrimonial -> Anexo IV.",
-    },
-    {
-        "descricao": "Limpeza, conservação, paisagismo e apoio a edifícios",
-        "prefixos": ("81",),
-        "palavras": ("limpeza", "conservacao", "conservação", "paisagismo",
-                     "jardinagem", "dedetizacao", "dedetização", "desinsetizacao",
-                     "desinsetização", "portaria", "condominio", "condomínio",
-                     "zeladoria", "manutencao de jardim", "manutenção de jardim"),
-        "anexo": "IV",
-        "prioridade": 80,
-        "observacao": "Limpeza, conservação e similares -> Anexo IV (CPP fora do DAS).",
-    },
-    {
-        "descricao": "Ensino, treinamento e educação",
-        "prefixos": ("85",),
-        "palavras": ("ensino", "educacao", "educação", "escola", "curso",
-                     "treinamento", "pre-escola", "pré-escola", "universidade",
-                     "idioma", "musica", "música", "dança", "danca"),
-        "anexo": "III",
-        "prioridade": 55,
-        "observacao": "Educação: ensino regular -> Anexo III; ensino livre/"
-                      "instrução (item 8.02 da LC 116) pode ir ao V pelo fator R.",
-    },
-    {
-        "descricao": "Saúde humana, veterinária e serviços sociais",
-        "prefixos": ("86", "87", "88"),
-        "palavras": ("clinica", "clínica", "medicina", "medico", "médico",
-                     "odontolog", "dentista", "veterinaria", "veterinária",
-                     "fisioterapia", "enfermagem", "nutricao", "nutrição",
-                     "psicologia", "assistencia social", "assistência social",
-                     "laboratorio", "laboratório", "hospital"),
-        "anexo": "V",
-        "prioridade": 70,
-        "observacao": "Saúde e serviços sociais -> Anexo V; com folha >= 28% da RBT12, Anexo III.",
-    },
-    {
-        "descricao": "Artes, cultura, esporte e lazer",
-        "prefixos": ("90", "91", "92", "93"),
-        "palavras": ("arte", "cultura", "esporte", "lazer", "academia", "fitness",
-                     "ginasio", "ginásio", "clube", "biblioteca", "museu",
-                     "espetaculo", "espetáculo", "musica", "música", "danca", "dança",
-                     "natacao", "natação", "jogos"),
-        "anexo": "III",
-        "prioridade": 50,
-        "observacao": "Academias e atividades esportivas -> Anexo III.",
-    },
-    {
-        "descricao": "Reparação, manutenção e serviços pessoais",
-        "prefixos": ("95", "96"),
-        "palavras": ("reparacao", "reparação", "manutencao", "manutenção", "conserto",
-                     "reforma de", "barbearia", "cabeleireiro", "estetica", "estética",
-                     "manicure", "salao", "salão", "lavanderia", "petshop", "pet shop",
-                     "banho e tosa", "costura", "sapateiro", "chaveiro", "eletronica",
-                     "eletrônica", "celular", "computador", "maquina", "máquina"),
-        "anexo": "III",
-        "prioridade": 55,
-        "observacao": "Reparação/manutenção e beleza -> Anexo III (não vai ao Anexo V).",
-    },
-    {
-        "descricao": "Serviços de escritório, apoio administrativo e gestão",
-        "prefixos": ("82",),
-        "palavras": ("escritorio", "escritório", "administrativo", "apoio administrativo",
-                     "secretaria", "secretariado", "copiadora", "reprografia",
-                     "fotocopia", "fotocópia", "impressao", "impressão",
-                     "digitalizacao", "digitalização", "arquivo", "protocolo",
-                     "cobranca", "cobrança", "cadastro", "telemarketing",
-                     "call center", "pesquisa de mercado", "agenciamento de"),
-        "anexo": "III",
-        "prioridade": 55,
-        "observacao": "Serviços de escritório e apoio administrativo -> Anexo III. "
-                      "Serviços intelectuais (quando for o caso) podem ir ao Anexo V "
-                      "pelo fator R.",
-    },
+_DIVISOES = [
+    # (divisões agrupadas, nome do grupo)
+    (("01", "02", "03", "05"), "Agricultura, pecuária, pesca e extrativismo"),
+    (("10", "11", "12"), "Indústria de alimentos, bebidas e fumo"),
+    (("13", "14", "15"), "Indústria têxtil, vestuário, couro e calçados"),
+    (("16", "17", "18"), "Indústria de madeira, papel, gráfica e mobiliário"),
+    (("19", "20", "21"), "Indústria química, farmacêutica e de borracha/plástico"),
+    (("22", "23", "24"), "Metalurgia, siderurgia e produtos de metal"),
+    (("25", "26", "27"), "Metalurgia, siderurgia e produtos de metal"),
+    (("28", "29", "30"), "Fabricação de máquinas, veículos e equipamentos"),
+    (("31", "32", "33", "39"), "Mobiliário, produtos diversos e serviços industriais"),
+    (("35", "36", "37", "38"), "Eletricidade, água, esgoto e resíduos"),
+    (("41", "42", "43"), "Construção civil e obras de engenharia"),
+    (("45", "46", "47"), "Comércio de veículos, por atacado e varejista"),
+    (("49", "50", "51"), "Transporte de cargas e passageiros"),
+    (("52", "53"), "Armazenagem, apoio ao transporte e entregas"),
+    (("55", "56"), "Alojamento e alimentação"),
+    (("58", "59", "60"), "Edição, gravação, rádio e TV"),
+    (("61",), "Telecomunicações"),
+    (("62", "63"), "Tecnologia da informação e software"),
+    (("64", "65", "66"), "Serviços financeiros e seguros"),
+    (("68",), "Imobiliárias e locação de imóveis"),
+    (("69", "70", "71"), "Serviços jurídicos, contábeis e de engenharia"),
+    (("72", "73", "74"), "Pesquisa, publicidade e serviços técnicos"),
+    (("75",), "Serviços veterinários"),
+    (("77",), "Locação de máquinas e equipamentos"),
+    (("79",), "Turismo"),
+    (("80", "81"), "Vigilância, segurança, limpeza e conservação"),
+    (("82",), "Serviços de escritório e apoio administrativo"),
+    (("85",), "Ensino, treinamento e educação"),
+    (("86", "87", "88"), "Saúde humana, veterinária e serviços sociais"),
+    (("90", "91", "92"), "Artes, cultura, esporte e lazer"),
+    (("93", "95", "96"), "Esportes, reparação e serviços pessoais"),
 ]
 
+_NOMES_ANEXO = {
+    "I": "Comércio",
+    "II": "Indústria",
+    "III": "Serviços gerais",
+    "IV": "Construção, limpeza e vigilância",
+    "V": "Serviços intelectuais (Fator \"r\")",
+}
+
 
 # ---------------------------------------------------------------------------
-# Funções auxiliares
+# Helpers
 # ---------------------------------------------------------------------------
 
 def apenas_digitos(codigo: str) -> str:
     """Remove pontos, traços e barras de um CNAE. Ex: '47.11-3/02' -> '4711302'."""
-    return "".join(ch for ch in str(codigo or "") if ch.isdigit())
+    return enquadramento.apenas_digitos(codigo)
 
 
 def formatar_cnae(codigo: str) -> str:
@@ -471,246 +92,47 @@ def formatar_cnae(codigo: str) -> str:
     Formata um CNAE no padrão 0000-0/00.
     Aceita '4711302', '47.11-3/02' ou '4711-3/02'.
     """
-    d = apenas_digitos(codigo)
-    if len(d) == 7:
-        return f"{d[0:4]}-{d[4]}/{(d[5:7]).zfill(2)}"
-    return str(codigo or "").strip()
+    return enquadramento.formatar_cnae(codigo)
 
 
 def normalizar(texto: str) -> str:
-    """Minúsculas e sem acentos, para comparação tolerante de palavras-chave."""
+    """Minúsculas e sem acentos, para comparação textual."""
     if not texto:
         return ""
-    tabela = str.maketrans(
-        "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ",
-        "aaaaaeeeeiiiiooooouuuucnaaaaaeeeeiiiiooooouuuucn",
-    )
-    return texto.translate(tabela).lower()
+    return enquadramento.normalizar(texto)
 
+
+# ---------------------------------------------------------------------------
+# API principal — delega ao motor legal
+# ---------------------------------------------------------------------------
 
 def sugerir_anexo(cnae: str, descricao: str = "") -> dict:
     """
-    Sugere o Anexo do Simples Nacional a partir do CNAE e/ou da descrição.
+    Sugere o Anexo do Simples Nacional para um CNAE.
 
-    Retorna um dicionário com:
-      anexo          -> 'I', 'II', 'III', 'IV' ou 'V' (ou None se indefinido)
-      descricao_grupo-> descrição do grupo identificado
-      observacao     -> ressalvas relevantes
-      confianca      -> 'alta', 'media' ou 'baixa'
+    Delega para `enquadramento.MOTOR.enquadrar()`. A descrição só é usada
+    para desempatar classes legalmente ambíguas (ex.: 18.13 impressão: ISS x
+    ICMS) — nunca para inventar um anexo a partir de palavras soltas.
+
+    Retorna:
+      anexo              -> 'I'..'V' ou None (CNAE ausente/inválido)
+      anexos_candidatos  -> todos os anexos legalmente possíveis
+      descricao_grupo    -> rótulo do tipo de atividade
+      observacao         -> ressalva (Fator "r", CPP à parte, etc.)
+      confianca          -> 'alta' (anexo único) ou 'media' (ambíguo)
+      tipo_atividade     -> 'comércio' / 'indústria' / 'serviço'
     """
-    digitos = apenas_digitos(cnae)
-    texto = normalizar(descricao)
-    prefixo4 = digitos[:4]
-    prefixo2 = digitos[:2]
-
-    melhor = None
-    melhor_score = -1
-
-    # Serviços de reparação/manutenção de veículos ficam no grupo 45 (comércio),
-    # mas são Anexo III. Trata antes da lógica geral para evitar conflito.
-    if digitos.startswith("452") or digitos.startswith("453"):
-        return {
-            "anexo": "III",
-            "descricao_grupo": "Reparação e manutenção de veículos",
-            "observacao": "Manutenção e reparação de veículos -> Anexo III "
-                          "(serviço, e não revenda de mercadoria).",
-            "confianca": "alta",
-        }
-
-    for grupo in GRUPOS_CNAE:
-        score = 0
-
-        # Casamento por prefixo do CNAE (mais forte).
-        for p in grupo["prefixos"]:
-            if digitos.startswith(p):
-                score += 50 + len(p)
-                break
-
-        # Casamento por palavra-chave na descrição ou no próprio texto do CNAE.
-        alvo = normalizar(descricao) + " " + normalizar(cnae)
-        for palavra in grupo.get("palavras", ()):
-            if palavra and normalizar(palavra) in alvo:
-                score += 30
-                break
-
-        # Desempate por prioridade do grupo.
-        if score > 0:
-            score += grupo.get("prioridade", 0) / 10.0
-
-        if score > melhor_score:
-            melhor_score = score
-            melhor = grupo
-
-    if melhor is None or melhor_score <= 0:
-        # Segunda tentativa: só por palavras-chave, sem CNAE válido.
-        alvo = normalizar(descricao)
-        for grupo in GRUPOS_CNAE:
-            for palavra in grupo.get("palavras", ()):
-                if palavra and normalizar(palavra) in alvo:
-                    anexo = _refinar_servico(grupo["anexo"], alvo)
-                    return {
-                        "anexo": anexo,
-                        "descricao_grupo": grupo["descricao"],
-                        "observacao": grupo.get("observacao", ""),
-                        "confianca": "media",
-                    }
-        return {
-            "anexo": None,
-            "descricao_grupo": "",
-            "observacao": "Não foi possível enquadrar automaticamente. "
-                          "Confirme o CNAE ou informe a descrição da atividade.",
-            "confianca": "baixa",
-        }
-
-    anexo = _refinar_servico(melhor["anexo"], normalizar(descricao))
-    confianca = "alta" if melhor_score >= 55 else "media"
-
-    return {
-        "anexo": anexo,
-        "descricao_grupo": melhor["descricao"],
-        "observacao": melhor.get("observacao", ""),
-        "confianca": confianca,
-    }
+    return MOTOR.enquadrar(cnae, descricao)
 
 
 def anexos_candidatos(cnae: str, descricao: str = "") -> list:
     """
-    Todos os anexos LEGALMENTE pertinentes a um CNAE/atividade.
+    Todos os anexos LEGALMENTE pertinentes ao CNAE.
 
-    Diferente de sugerir_anexo() — que sempre elege UM vencedor — esta função
-    devolve a lista completa de anexos possíveis, para que a interface libere
-    a simulação de todos eles (ex.: o fator R decide entre V e III).
-
-    É ADITIVA e retrocompatível: não substitui nem altera sugerir_anexo().
-    Retorna uma lista ordenada (o recomendado primeiro, quando houver).
+    O primeiro é o recomendado. O Fator "r" só libera III<->V nas atividades
+    do art. 18, §5º-D; o Anexo IV nunca é combinado com outro anexo.
     """
-    base = sugerir_anexo(cnae, descricao)
-    principal = (base.get("anexo") or "").upper()
-    texto = normalizar(descricao) + " " + normalizar(cnae)
-    digitos = apenas_digitos(cnae)
-    prefixo2 = digitos[:2]
-
-    candidatos = []
-
-    def _add(anexo):
-        anexo = (anexo or "").upper()
-        if anexo in ("I", "II", "III", "IV", "V") and anexo not in candidatos:
-            candidatos.append(anexo)
-
-    # 1) O anexo recomendado vem primeiro.
-    _add(principal)
-
-    # 2) Anexo V <-> Anexo III: a regra do fator R (folha >= 28% da RBT12).
-    #    A bifurcação SÓ se aplica às atividades com previsão no Anexo V
-    #    (serviços do §5º-C da LC 123). Atividades exclusivamente do Anexo III
-    #    (educação, transporte, locação, academias, alimentação, reparação etc.)
-    #    NÃO migram para o Anexo V pelo fator R.
-    if principal in ("III", "V"):
-        _add("III")
-        if principal == "V" or _sujeito_anexo_v(cnae, texto):
-            _add("V")
-
-    # 3) Comércio (I) x Indústria (II): "produz o que vende" alterna o anexo.
-    #    Só libera o Anexo I quando há INDÍCIO REAL de comércio/revenda — seja
-    #    por palavra-chave na descrição, seja por divisão típica de comércio
-    #    varejista (47). A divisão 45 (veículos) é MISTA: só conta como
-    #    comércio se a descrição indicar venda/revenda (reparação/manutenção
-    #    é serviço, Anexo III). Assim, uma indústria/serviço puro NÃO recebe o
-    #    Anexo I indevidamente (ex.: impressão gráfica -> II e III, nunca I).
-    tem_comercio = (
-        any(normalizar(p) in texto for p in _PALAVRAS_COMERCIO)
-        or prefixo2 == "47"
-    )
-    # Indício real de industrialização/fabricação própria (Anexo II).
-    tem_industria = any(normalizar(p) in texto for p in _PALAVRAS_INDUSTRIA)
-    if principal in ("I", "II") and tem_comercio:
-        _add("I")
-        # Anexo II (indústria) SÓ entra se a descrição citar indústria/fabricação.
-        # Comércio/revenda puro NÃO libera o Anexo II.
-        if tem_industria:
-            _add("II")
-
-    # 3.1) Indústria (II) x Serviço (III): a MESMA atividade industrial pode ser
-    #      enquadrada como industrialização por conta própria (II) ou como
-    #      prestação de serviço (III) — ex.: impressão gráfica. Nesse caso
-    #      liberamos AMBOS.
-    #      Porém, quando o principal já é um SERVIÇO (III), NÃO puxamos o
-    #      Anexo II: reparação/manutenção, por exemplo, é serviço (III) e não
-    #      deve liberar indústria. O Anexo II só entra se houver indício real
-    #      de industrialização na descrição.
-    if principal == "II":
-        _add("II")
-        _add("III")
-    elif principal == "III":
-        if tem_industria:
-            _add("II")
-        _add("III")
-
-    # 4) Divisões tipicamente ambíguas, mesmo quando a heurística erra o cap.
-    #    Comércio tem PRIORIDADE: se a atividade é, na prática, revenda/comércio,
-    #    não forçamos o Anexo IV (ex.: 4744-0/99 comércio de material de
-    #    construção é Anexo I, não IV).
-    if prefixo2 in ("45",):
-        # Revenda (I) x manutenção/reparação (III). Reparação/manutenção de
-        # veículos é SERVIÇO: só I se houver indício real de comércio.
-        if tem_comercio:
-            _add("I")
-        _add("III")
-    if prefixo2 in ("47",):
-        # Varejo (I) x produção própria (II).
-        _add("I")
-        # Anexo II só com indício real de fabricação/própria produção.
-        if tem_industria:
-            _add("II")
-    if not tem_comercio:
-        if prefixo2 in ("43", "80", "81"):
-            # Construção, vigilância e limpeza -> Anexo IV.
-            _add("IV")
-        if any(p in texto for p in ("construcao", "construção", "obra",
-                                    "vigilancia", "vigilância", "limpeza")):
-            _add("IV")
-
-    # Anexo IV é incompatível com a lógica do fator R; mantém só o que existe.
-    if not candidatos:
-        _add(principal)
-
-    # Atividades exclusivas do Anexo IV (construção, vigilância, limpeza) não
-    # podem receber III/V por causa da bifurcação II<->III: nesses casos o
-    # enquadramento correto é só o Anexo IV.
-    if "IV" in candidatos:
-        return ["IV"]
-
-    return candidatos
-
-
-def _refinar_servico(anexo: str, texto_normalizado: str) -> str:
-    """
-    Ajusta o Anexo III/IV/V de acordo com palavras-chave adicionais.
-
-    - Construção, vigilância e limpeza -> Anexo IV.
-    - Serviços intelectuais -> Anexo V.
-    - Educação, reparação, transporte, locação e academias -> Anexo III
-      (têm precedência sobre "treinamento"/"manutenção" do Anexo V).
-    """
-    if anexo not in ("III", "V"):
-        return anexo
-
-    # Atividades do Anexo IV têm precedência.
-    for palavra in _PALAVRAS_ANEXO_IV:
-        if normalizar(palavra) in texto_normalizado:
-            return "IV"
-
-    # Serviços que são Anexo III mesmo contendo palavras típicas do Anexo V
-    # (ex.: "manutenção" em reparação, "ensino regular" em educação).
-    for palavra in _PALAVRAS_ANEXO_III_FORTE:
-        if normalizar(palavra) in texto_normalizado:
-            return "III"
-
-    for palavra in _PALAVRAS_ANEXO_V:
-        if normalizar(palavra) in texto_normalizado:
-            return "V"
-
-    return anexo
+    return MOTOR.candidatos(cnae, descricao)
 
 
 def anexo_usa_fator_r(anexo: str) -> bool:
@@ -726,8 +148,6 @@ def calcular_fator_r(folha_12m, rbt12) -> dict:
     Calcula o fator R = folha de salários dos últimos 12 meses / RBT12.
 
     Se fator R >= 0,28 -> Anexo III; caso contrário -> Anexo V.
-    Retorna dicionário com o valor do fator, o anexo resultante e a alíquota
-    de corte usada (28%).
     """
     try:
         folha = float(folha_12m or 0)
@@ -748,16 +168,22 @@ def calcular_fator_r(folha_12m, rbt12) -> dict:
 
 
 def listar_grupos() -> list:
-    """Lista simplificada dos grupos cadastrados (para consulta na interface)."""
-    return [
-        {
-            "descricao": g["descricao"],
-            "prefixos": list(g["prefixos"]),
-            "anexo": g["anexo"],
-            "observacao": g.get("observacao", ""),
-        }
-        for g in GRUPOS_CNAE
-    ]
+    """Lista simplificada das divisões de CNAE e do anexo base (interface)."""
+    vistos = set()
+    saida = []
+    for divisoes, nome in _DIVISOES:
+        if nome in vistos:
+            continue
+        vistos.add(nome)
+        anexo = enquadramento.TABELA_ANEXO.get(divisoes[0])
+        saida.append({
+            "descricao": nome,
+            "prefixos": list(divisoes),
+            "anexo": anexo,
+            "observacao": f"Anexo {anexo}: {_NOMES_ANEXO.get(anexo, '')}"
+                          if anexo else "Anexo definido por classe de CNAE.",
+        })
+    return saida
 
 
 ANEXOS_SIMPLES = ["I", "II", "III", "IV", "V"]

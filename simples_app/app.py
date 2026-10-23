@@ -48,6 +48,7 @@ import calc
 import cnaes
 import consulta_cnpj
 import database as db
+import enquadramento
 import explicacoes
 import extrato_simples
 import xml_import
@@ -299,6 +300,33 @@ def _ler_form_empresa() -> dict:
         "uf": request.form.get("uf", "").strip(),
         "observacoes": request.form.get("observacoes", "").strip(),
     }
+
+
+def _registrar_cnae_conhecimento(dados: dict) -> None:
+    """Grava no banco de conhecimento a descrição oficial do CNAE da empresa.
+
+    Alimentação sob demanda: o catálogo `cnae` do `instance/enquadramento.db`
+    só cresce com o que o app efetivamente vê no cadastro/edição. Sem isso a
+    tabela fica vazia e `item_para_cnae()` nunca consegue interpretar.
+
+    Silencioso por desenho: falha aqui nunca pode impedir o salvamento da
+    empresa.
+    """
+    codigo = cnaes.apenas_digitos(dados.get("cnae_principal") or "")
+    descricao = (dados.get("cnae_descricao") or "").strip()
+    if len(codigo) != 7 or not descricao:
+        return
+    try:
+        from enquadramento_db import Conhecimento
+        kb = Conhecimento()
+        kb.init()
+        # divisão e classe saem do próprio código (d[:2] / d[:4])
+        kb.registrar_cnae(codigo, descricao)
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning(
+            "Não foi possível registrar o CNAE %s no conhecimento: %s",
+            codigo, exc,
+        )
 
 
 def empresa_ativa():
@@ -1146,6 +1174,7 @@ def registrar_rotas(app: Flask):
                 flash("A razão social é obrigatória.", "erro")
             else:
                 empresa_id = db.criar_empresa(g.usuario["id"], **dados)
+                _registrar_cnae_conhecimento(dados)
                 # Ao cadastrar, a empresa passa a ser a ativa do usuário — assim o
                 # dashboard e o menu já liberam os anexos identificados pelo CNAE.
                 db.definir_empresa_usuario(g.usuario["id"], empresa_id)
@@ -1189,6 +1218,7 @@ def registrar_rotas(app: Flask):
                 flash("A razão social é obrigatória.", "erro")
             else:
                 db.atualizar_empresa(empresa_id, **dados)
+                _registrar_cnae_conhecimento(dados)
                 db.registrar_log(g.usuario, "editar_empresa", dados["razao_social"])
                 flash("Empresa atualizada com sucesso.", "ok")
                 return redirect(url_for("empresa_editar", empresa_id=empresa_id))
@@ -1654,6 +1684,17 @@ def registrar_rotas(app: Flask):
         if not cnae and not descricao:
             return jsonify({"erro": "Informe o CNAE ou a descrição da atividade."}), 400
 
+        # A análise é pela DESCRIÇÃO COMPLETA: principal + CNAEs secundários.
+        # Os campos do formulário têm precedência; a descrição da linha é o
+        # mínimo quando a requisição vem de outro ponto.
+        completa = [
+            (dados.get("cnae_descricao") or "").strip(),
+            (dados.get("cnaes_secundarios") or "").strip(),
+        ]
+        texto_completo = " ".join(p for p in completa if p).strip()
+        if texto_completo:
+            descricao = texto_completo
+
         return jsonify(explicacoes.explicar(cnae, descricao))
 
     # ------------------- CNPJ: consulta na Receita (AJAX) --------------------
@@ -1672,8 +1713,13 @@ def registrar_rotas(app: Flask):
         # Enquadramento: usa o CNAE principal e as descrições como reforço.
         texto = " ".join(
             [dados["cnae_descricao"]]
-            + [item["descricao"] for item in dados["cnaes_secundarios"][:5]]
+            + [item["descricao"] for item in dados["cnaes_secundarios"]]
         )
+        # Catálogo sob demanda: a Receita é a fonte oficial da descrição.
+        _registrar_cnae_conhecimento({
+            "cnae_principal": dados["cnae_principal"],
+            "cnae_descricao": dados["cnae_descricao"],
+        })
         dados["sugestao_anexo"] = cnaes.sugerir_anexo(dados["cnae_principal"], texto)
         # Enriquece o payload com todos os anexos LEGALMENTE pertinentes (ex.:
         # III<->V pelo fator R), sem alterar a função de sugestão. O formulário
@@ -1730,6 +1776,165 @@ def registrar_rotas(app: Flask):
 
         tabelas = {a: db.listar_tabelas_base(a) for a in ANEXOS_VALIDOS}
         return render_template("admin_tabelas.html", tabelas=tabelas, anexos=ANEXOS_VALIDOS)
+
+    # ------------- Administração: CNAE -> item da LC 116 (código de serviço) --
+
+    @app.route("/admin/tabelas/cnae-item", methods=["GET", "POST"])
+    @permissao_required("editar_tabelas")
+    @admin_required
+    def admin_cnae_item():
+        """Edita o vínculo CNAE -> item que define o código de serviço.
+
+        É a tabela Cnae_X_Item_Lista_Servicos, agora no banco: corrigir um
+        vínculo aqui vale na hora para o cadastro, o Excel e o PDF, sem
+        precisar alterar código nem republicar o app.
+        """
+        if request.method == "POST":
+            fluxo = "excluir" if request.form.get("excluir_id") else request.form.get(
+                "fluxo", "editar"
+            )
+            try:
+                if fluxo == "excluir":
+                    registro_id = int(
+                        request.form.get("excluir_id")
+                        or request.form.get("id", "0")
+                        or 0
+                    )
+                    db.excluir_cnae_item(registro_id)
+                    db.registrar_log(
+                        g.usuario, "excluir_cnae_item", f"Vínculo {registro_id}"
+                    )
+                    flash("Vínculo excluído.", "ok")
+
+                elif fluxo == "novo":
+                    cnae = request.form.get("cnae_itens_lc116_novo", "")
+                    item = request.form.get("novo_item", "")
+                    db.adicionar_cnae_item(cnae, item)
+                    db.registrar_log(
+                        g.usuario, "adicionar_cnae_item",
+                        f"{cnae} -> {item}",
+                    )
+                    flash("Vínculo incluído.", "ok")
+
+                else:
+                    campos = [k for k in request.form if k.startswith("id_")]
+                    alterados = 0
+                    for key in campos:
+                        registro_id = int(key[3:])
+                        cnae = request.form.get(f"cnae_{registro_id}", "")
+                        item = request.form.get(f"item_{registro_id}", "")
+                        if not cnae.strip() and not item.strip():
+                            continue
+                        db.atualizar_cnae_item(registro_id, cnae, item)
+                        alterados += 1
+                    db.registrar_log(
+                        g.usuario, "editar_cnae_item",
+                        f"CNAE x Item LC 116 ({alterados} registro(s))",
+                    )
+                    flash(f"{alterados} vínculo(s) atualizado(s).", "ok")
+
+                # O motor memoriza o enquadramento por processo: limpa para
+                # que a alteração valha já na próxima consulta.
+                enquadramento.MOTOR.limpar_cache()
+            except Exception as exc:  # noqa: BLE001
+                flash(f"Erro ao salvar: {exc}", "erro")
+
+            busca = request.form.get("busca", "").strip()
+            return redirect(url_for("admin_cnae_item", busca=busca or None))
+
+        busca = (request.args.get("busca") or "").strip()
+        registros = db.listar_cnae_itens(busca or None, limite=2000)
+        from itens_lc116 import ITENS_LC116
+        descricoes = dict(ITENS_LC116)
+        for r in registros:
+            descricoes.setdefault(
+                r["item"], descricoes.get(r["item"].lstrip("0"), "")
+            )
+        return render_template(
+            "admin_cnae_item.html",
+            registros=registros,
+            busca=busca,
+            total=len(registros),
+            descricoes=descricoes,
+        )
+
+    # -------------- Administração: CNAE -> ANEXO do Simples (editável) -------
+
+    @app.route("/admin/tabelas/cnae-anexo", methods=["GET", "POST"])
+    @permissao_required("editar_tabelas")
+    @admin_required
+    def admin_cnae_anexo():
+        """Edita a relação CNAE -> Anexo usada no enquadramento.
+
+        Base da planilha CNAE_Subclasses_2_3_Estrutura_Detalhada_DESCRICOES,
+        agora no banco. Corrigir um anexo aqui vale na hora (motor, cadastro,
+        Excel e PDF) sem alterar código nem republicar o app.
+        """
+        if request.method == "POST":
+            fluxo = "excluir" if request.form.get("excluir_id") else request.form.get(
+                "fluxo", "editar"
+            )
+            try:
+                if fluxo == "excluir":
+                    registro_id = int(
+                        request.form.get("excluir_id")
+                        or request.form.get("id", "0")
+                        or 0
+                    )
+                    origem = "regra fixa"
+                    db.excluir_cnae_anexo(registro_id)
+                    db.registrar_log(
+                        g.usuario, "excluir_cnae_anexo",
+                        f"CNAE x Anexo {registro_id} (volta para {origem})",
+                    )
+                    flash(
+                        "Registro excluído: o CNAE volta a usar a regra fixa "
+                        "do motor.", "ok",
+                    )
+
+                elif fluxo == "novo":
+                    cnae = request.form.get("cnae_anexo_novo", "")
+                    anexo = request.form.get("novo_anexo", "")
+                    descricao = request.form.get("nova_descricao", "")
+                    db.adicionar_cnae_anexo(cnae, anexo, descricao)
+                    db.registrar_log(
+                        g.usuario, "adicionar_cnae_anexo", f"{cnae} -> {anexo}",
+                    )
+                    flash("Relação incluída e já vigente.", "ok")
+
+                else:
+                    campos = [k for k in request.form if k.startswith("id_")]
+                    alterados = 0
+                    for key in campos:
+                        registro_id = int(key[3:])
+                        anexo = request.form.get(f"anexo_{registro_id}", "")
+                        if not anexo.strip():
+                            continue
+                        db.atualizar_cnae_anexo(registro_id, anexo)
+                        alterados += 1
+                    db.registrar_log(
+                        g.usuario, "editar_cnae_anexo",
+                        f"CNAE x Anexo ({alterados} registro(s))",
+                    )
+                    flash(f"{alterados} enquadramento(s) atualizado(s).", "ok")
+
+                # Sem isso, um CNAE já consultado no processo continuaria
+                # exibindo o anexo antigo (motor, cadastro, Excel e PDF).
+                enquadramento.MOTOR.limpar_cache()
+            except Exception as exc:  # noqa: BLE001
+                flash(f"Erro ao salvar: {exc}", "erro")
+
+            busca = request.form.get("busca", "").strip()
+            return redirect(url_for("admin_cnae_anexo", busca=busca or None))
+
+        busca = (request.args.get("busca") or "").strip()
+        registros = db.listar_cnae_anexos(busca or None, limite=2000)
+        return render_template(
+            "admin_cnae_anexo.html",
+            registros=registros,
+            busca=busca,
+            total=len(registros),
+        )
 
     # ------------------------------ Logs -------------------------------------
 

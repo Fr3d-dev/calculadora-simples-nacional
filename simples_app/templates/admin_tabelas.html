@@ -14,6 +14,25 @@
   Alíquotas devem ser informadas em decimal (ex.: <strong>0.04</strong> = 4%).
 </div>
 
+<div class="card">
+  <h2>CNAE × Anexo do Simples</h2>
+  <p style="margin:0 0 10px">
+    Define o <strong>anexo da atividade</strong> no cadastro, no Excel e no PDF.
+    Esta tabela tem <strong>precedência sobre a regra fixa</strong> do motor: corrigir um
+    anexo aqui vale na hora, sem republicar o projeto.
+  </p>
+  <a class="btn" href="{{ url_for('admin_cnae_anexo') }}">🏷️ Editar CNAE × Anexo</a>
+</div>
+
+<div class="card">
+  <h2>CNAE × Item da LC 116 (código de serviço)</h2>
+  <p style="margin:0 0 10px">
+    Define o <strong>código de serviço</strong> demonstrado no cadastro, no Excel e no PDF.
+    Corrigir um vínculo aqui vale na hora, sem republicar o projeto.
+  </p>
+  <a class="btn" href="{{ url_for('admin_cnae_item') }}">📋 Editar CNAE × Item LC 116</a>
+</div>
+
 <form method="post">
   {% for a in anexos %}
   <div class="card">

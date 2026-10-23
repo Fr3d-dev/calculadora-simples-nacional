@@ -20,9 +20,16 @@ Este módulo é ADITIVO: não altera sugerir_anexo()/anexos_candidatos().
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import cnaes
+from cnae_item_lc116 import CNAE_ITEM, ITEM_DESCRICAO
+from enquadramento import MOTOR
+from itens_lc116 import ITENS_LC116
+
+
+_KB = None  # cache do banco de conhecimento (itens da LC 116)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +198,8 @@ EXPLICACOES_CNAE: list[dict] = [
         ),
     },
     {
-        "prefixos": ("862", "863", "865", "866"),
+        "prefixos": ("86",),
+        "exceto": ("8640", "8650", "8660", "8690"),
         "titulo": "Saúde (consultórios, clínicas e laboratórios)",
         "resumo": (
             "Serviços de saúde se enquadram no Anexo V (intelectual) ou Anexo III, "
@@ -278,7 +286,7 @@ EXPLICACOES_CNAE: list[dict] = [
         ),
     },
     {
-        "prefixos": ("43",),
+        "prefixos": ("41", "42", "43"),
         "titulo": "Construção civil",
         "resumo": (
             "Construção de edifícios, obras e serviços de engenharia -> Anexo IV. "
@@ -308,13 +316,28 @@ EXPLICACOES_CNAE: list[dict] = [
         "prefixos": ("80", "81"),
         "titulo": "Vigilância, segurança, limpeza e conservação",
         "resumo": (
-            "Vigilância, limpeza e conservação -> Anexo IV. Como na construção, a "
-            "CPP é recolhida separadamente e não há fator R."
+            "Vigilância, segurança, limpeza e conservação -> Anexo IV (art. 18, "
+            "§5º-C, da LC 123/2006). Como na construção, a CPP é recolhida "
+            "separadamente e o ISS não está incluído no DAS. Não há fator R "
+            "nessas atividades."
         ),
         "itens_lc116": [
             {
                 "item": "11.02",
-                "descricao": "Vigilância, segurança ou monitoramento de bens e pessoas (dentro do escopo de 11.01/11.02)",
+                "descricao": (
+                    "Vigilância, segurança ou monitoramento de bens e pessoas "
+                    "(inclusive por meio de cessão de mão de obra)"
+                ),
+                "tributo": "ISS",
+                "anexo": "Anexo IV",
+            },
+            {
+                "item": "11.04",
+                "descricao": (
+                    "Varrição, coleta, remoção, incineração, tratamento, reciclagem, "
+                    "separação e destinação final de lixo, rejeitos e outros resíduos "
+                    "(atividade de limpeza)"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo IV",
             },
@@ -337,9 +360,16 @@ EXPLICACOES_CNAE: list[dict] = [
                 "anexo": "Anexo IV",
             },
         ],
+        "palavras_icms": ("vigilancia sem cessao de mao de obra",
+                          "vigilância sem cessão de mão de obra"),
+        "palavras_iss": ("vigilancia", "vigilância", "seguranca", "segurança", "monitoramento",
+                         "limpeza", "conservacao", "conservação", "dedetizacao", "dedetização",
+                         "jardinagem", "portaria", "coleta de lixo"),
         "fundamento": (
-            "Itens 7.10, 7.11, 7.13 e 11.02 da LC 116/2003. "
-            "Anexo IV da LC 123/2006 (CPP à parte; sem fator R)."
+            "Art. 18, §5º-C, da LC 123/2006: os serviços de vigilância, limpeza "
+            "e conservação são tributados no Anexo IV, com a CPP recolhida "
+            "separadamente (fora do DAS) e sem aplicação do fator R. Itens "
+            "11.02, 11.04, 7.10, 7.11 e 7.13 da LC 116/2003."
         ),
     },
     {
@@ -363,6 +393,8 @@ EXPLICACOES_CNAE: list[dict] = [
                 "anexo": "Anexo III/V",
             },
         ],
+        "palavras_iss": ("ensino", "escola", "curso", "treinamento", "educacao",
+                         "educação", "instrucao", "instrução", "capacitacao", "capacitação"),
         "fundamento": (
             "Itens 8.01 e 8.02 da LC 116/2003. Anexo III da LC 123/2006 para o "
             "ensino regular (item 8.01); para o ensino livre/instrução (item "
@@ -379,27 +411,31 @@ EXPLICACOES_CNAE: list[dict] = [
         ),
         "itens_lc116": [
             {
-                "item": "14.03",
-                "descricao": "Dispensa de qualquer natureza",
-                "tributo": "ISS",
-                "anexo": "Anexo III/V",
+                "item": "—",
+                "descricao": (
+                    "Não há item na LC 116/2003 para o preparo de alimentos: "
+                    "fornecimento de alimentação é tributado pelo ICMS (item "
+                    "1.01 do Anexo I da LC 123/2006)"
+                ),
+                "tributo": "ICMS",
+                "anexo": "Anexo I",
             },
             {
-                "item": "14.04",
-                "descricao": "Lubrificação, limpeza e similares",
-                "tributo": "ISS",
-                "anexo": "Anexo III/V",
-            },
-            {
-                "item": "17.02",
-                "descricao": "Assessoria e consultoria para execução de projeto, atividade ou serviço (apoio à alimentação)",
+                "item": "6.04",
+                "descricao": "Organização de festas e recepções; bufê (exceto o fornecimento de alimentação e bebidas, que fica sujeito ao ICMS)",
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
         ],
+        "palavras_icms": ("restaurante", "lanchonete", "padaria", "bar", "pizzaria",
+                          "cafeteria", "cantina", "alimentacao", "alimentação",
+                          "bebida", "refeicao", "refeição", "delivery", "comercio"),
+        "palavras_iss": ("bufe", "buffet", "festa", "recepcao", "recepção",
+                         "evento", "fornecimento de mao de obra", "mão de obra"),
         "fundamento": (
-            "Itens 14.03, 14.04 e 17.02 da LC 116/2003 (serviços anexos à "
-            "alimentação). Venda de mercadoria -> Anexo I; preparo/serviço -> III/V."
+            "A venda de mercadoria (alimentação preparada) segue o Anexo I da "
+            "LC 123/2006 e o ICMS (art. 155, II, CF). Só a organização de festas "
+            "e recepções/bufê (item 6.04 da LC 116/2003) é serviço de ISS."
         ),
     },
     {
@@ -425,7 +461,10 @@ EXPLICACOES_CNAE: list[dict] = [
             },
             {
                 "item": "17.19",
-                "descricao": "Contabilidade, inclusive serviços técnicos e auxiliares (assessoria e consultoria em informática / fiscal)",
+                "descricao": (
+                    "Contabilidade, inclusive serviços técnicos e auxiliares "
+                    "(abrange contabilidade, auditoria e perícia contábil)"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
@@ -447,30 +486,33 @@ EXPLICACOES_CNAE: list[dict] = [
         ),
         "itens_lc116": [
             {
-                "item": "17.01",
-                "descricao": "Assessoria e consultoria em informática (advocacia e serviços jurídicos)",
+                "item": "17.02",
+                "descricao": "Datilografia, digitação, estenografia, expediente, secretária em geral, resposta audível, redação, edição, interpretação e tradução",
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
             {
-                "item": "17.02",
-                "descricao": "Serviços de advocacia, inclusive consultoria e assessoria jurídica",
+                "item": "17.14",
+                "descricao": "Assessoria, consultoria, gestão, organização e controle (despachante, advogado, contador e congêneres)",
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
         ],
-        "palavras_iss": ("advocacia", "advogado", "juridico", "jurídico", "jurídica"),
+        "palavras_iss": ("advocacia", "advogado", "juridico", "jurídico", "jurídica",
+                         "despachante"),
         "fundamento": (
-            "Itens 17.01 e 17.02 da LC 116/2003. Anexos III e V da LC 123/2006 "
-            "(fator R aplicável)."
+            "Item 17.14 da LC 116/2003 (assessoria e consultoria de qualquer "
+            "natureza, incluindo advocacia) e item 17.02 (redação, edição, "
+            "interpretação). Anexos III e V da LC 123/2006 (fator R aplicável)."
         ),
     },
     {
-        "prefixos": ("7111", "7112", "7119"),
+        "prefixos": ("7111", "7112", "7119", "7120"),
         "titulo": "Engenharia, arquitetura e serviços técnicos",
         "resumo": (
-            "Engenharia, arquitetura e afins são atividade intelectual (ISS). "
-            "Anexo III ou V conforme o fator R (folha de salários x RBT12)."
+            "Engenharia, arquitetura e serviços técnicos são atividade intelectual "
+            "(ISS). Ensaios e análises técnicas também são ISS, pelo item 17.09 da "
+            "LC 116/2003. Anexo III ou V conforme o fator R (folha de salários x RBT12)."
         ),
         "itens_lc116": [
             {
@@ -487,43 +529,71 @@ EXPLICACOES_CNAE: list[dict] = [
             },
             {
                 "item": "7.03",
-                "descricao": "Elaboração de planos diretores, estudos de viabilidade, estudos organizacionais e outros, relacionados com obras e serviços de engenharia",
+                "descricao": "Elaboração de planos diretores, estudos de viabilidade, estudos organizacionais e outros, relacionados com obras e serviços de engenharia; elaboração de anteprojetos, projetos básicos e projetos executivos para trabalhos de engenharia",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "7.19",
+                "descricao": "Acompanhamento e fiscalização da execução de obras de engenharia, arquitetura e urbanismo",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "17.09",
+                "descricao": "Perícias, laudos, exames técnicos e análises técnicas",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "28.01",
+                "descricao": "Serviços de avaliação de bens e serviços de qualquer natureza",
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
         ],
         "palavras_iss": ("engenharia", "arquitetura", "arquiteto", "engenheiro",
-                         "projeto", "consultoria"),
+                         "projeto", "consultoria", "perícia", "pericia", "laudo",
+                         "ensaio", "análise técnica", "analise tecnica"),
         "fundamento": (
-            "Itens 7.01, 7.02 e 7.03 da LC 116/2003. Anexos III/V (projetos) e "
-            "Anexo IV (execução de obras) da LC 123/2006."
+            "Itens 7.01, 7.02, 7.03 e 7.19 da LC 116/2003; serviços de ensaio e "
+            "análise técnica no item 17.09, e avaliação de bens no item 28.01. "
+            "Anexos III/V (serviços intelectuais) e Anexo IV (execução de obras) "
+            "da LC 123/2006."
         ),
     },
     {
         "prefixos": ("7311", "7319"),
         "titulo": "Publicidade e marketing",
         "resumo": (
-            "Publicidade, propaganda e marketing -> Anexo III (ISS). É prestação de "
-            "serviço intelectual comum, sem fator R quando a atividade não é "
-            "regulamentada."
+            "Publicidade, propaganda e marketing são prestação de serviço (ISS) e "
+            "seguem o Anexo III, salvo as atividades de propaganda que integrem o "
+            "Anexo V (por exemplo, agenciamento de propaganda/produção de material "
+            "publicitário enquadrado como criação intelectual), quando o fator R é "
+            "inferior a 28%."
         ),
         "itens_lc116": [
             {
                 "item": "17.06",
                 "descricao": "Propaganda e publicidade, inclusive promoção de vendas, planejamento de campanhas ou sistemas de publicidade, elaboração de desenhos, textos e demais materiais publicitários",
                 "tributo": "ISS",
-                "anexo": "Anexo III",
+                "anexo": "Anexo III/V",
             },
             {
                 "item": "17.08",
                 "descricao": "Franquia (franchising) e afins",
                 "tributo": "ISS",
-                "anexo": "Anexo III",
+                "anexo": "Anexo III/V",
             },
         ],
-        "palavras_iss": ("publicidade", "propaganda", "marketing", "anuncio", "anúncio"),
+        "palavras_icms": ("revenda de material", "comercio de material", "comércio de material",
+                          "impressao de material", "impressão de material", "fabricacao de brinde",
+                          "fabricação de brinde"),
+        "palavras_iss": ("publicidade", "propaganda", "marketing", "anuncio", "anúncio",
+                         "campanha", "agencia", "agência"),
         "fundamento": (
-            "Itens 17.06 e 17.08 da LC 116/2003. Anexo III da LC 123/2006."
+            "Itens 17.06 e 17.08 da LC 116/2003. Anexos III e V da LC 123/2006 "
+            "(fator R quando a atividade for classificada no Anexo V)."
         ),
     },
     {
@@ -536,26 +606,49 @@ EXPLICACOES_CNAE: list[dict] = [
         "itens_lc116": [
             {
                 "item": "3.01",
-                "descricao": "Locação e manutenção de máquinas e equipamentos sem operador",
+                "descricao": (
+                    "Locação e manutenção de máquinas, aparelhos, equipamentos, "
+                    "motores, dentre outros, e de seus acessórios, sem operador"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
             {
                 "item": "3.02",
-                "descricao": "Locação de bens móveis, inclusive de veículos",
+                "descricao": (
+                    "Cessão de andaimes, palcos, coberturas e outras estruturas de "
+                    "uso e aplicação na construção civil"
+                ),
+                "tributo": "ISS",
+                "anexo": "Anexo IV",
+            },
+            {
+                "item": "3.05",
+                "descricao": (
+                    "Locação de animais (cavalos, bois, muares, ovelhas e semelhantes) "
+                    "para qualquer finalidade"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
             {
-                "item": "3.05",
-                "descricao": "Locação de máquinas e equipamentos, bem como de ferramentas para uso próprio do locatário",
+                "item": "15.01",
+                "descricao": (
+                    "Locação de bens móveis sem operador, inclusive veículos "
+                    "(exceto locação de máquinas/equipamentos, item 3.01)"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
         ],
-        "palavras_iss": ("locacao", "locação", "aluguel", "arrendamento"),
+        "palavras_icms": ("imovel", "imóvel", "locacao de imovel", "locação de imóvel",
+                          "locacao de imoveis", "locação de imóveis"),
+        "palavras_iss": ("locacao", "locação", "aluguel", "arrendamento", "sem operador",
+                         "maquinas", "máquinas", "equipamentos", "veiculos", "veículos"),
         "fundamento": (
-            "Itens 3.01, 3.02 e 3.05 da LC 116/2003. Anexo III da LC 123/2006."
+            "Itens 3.01, 3.02, 3.05 e 15.01 da LC 116/2003. Anexo III da "
+            "LC 123/2006; a cessão de andaimes e estruturas para construção "
+            "civil (item 3.02) é Anexo IV. Locação de imóveis não é ISS."
         ),
     },
     {
@@ -575,17 +668,29 @@ EXPLICACOES_CNAE: list[dict] = [
             },
             {
                 "item": "16.02",
-                "descricao": "Outros serviços de transporte de natureza municipal",
+                "descricao": "Outros serviços de transporte de natureza municipal (inclusive transporte de cargas dentro do município)",
                 "tributo": "ISS",
                 "anexo": "Anexo III",
+            },
+            {
+                "item": "—",
+                "descricao": (
+                    "Transporte intermunicipal/interestadual (cargas ou "
+                    "passageiros): não é ISS nem há item na LC 116/2003 — é "
+                    "tributado pelo ICMS (Anexo I, item 1.01)"
+                ),
+                "tributo": "ICMS",
+                "anexo": "Anexo I",
             },
         ],
         "palavras_icms": ("intermunicipal", "interestadual", "carga", "cargas", "logistica",
                           "logística", "frota", "rodoviario de cargas"),
-        "palavras_iss": ("municipal", "coletivo", "passageiros", "entrega", "motoboy"),
+        "palavras_iss": ("municipal", "coletivo", "passageiros", "entrega", "motoboy",
+                         "urbano", "porte", "movimentacao", "movimentação", "armazenagem"),
         "fundamento": (
-            "Itens 16.01 e 16.02 da LC 116/2003. Transporte intermunicipal/interestadual -> "
-            "ICMS (art. 155, II, CF) e Anexo I da LC 123/2006."
+            "Itens 16.01 e 16.02 da LC 116/2003 (transporte de natureza municipal). "
+            "Transporte intermunicipal/interestadual -> ICMS (art. 155, II, CF) e "
+            "Anexo I da LC 123/2006."
         ),
     },
     {
@@ -631,22 +736,60 @@ EXPLICACOES_CNAE: list[dict] = [
         ),
         "itens_lc116": [
             {
-                "item": "6.04",
-                "descricao": "Organização de festas e recepções; bufê (exceto o fornecimento de alimentação e bebidas, que fica sujeito ao ICMS)",
+                "item": "12.01",
+                "descricao": "Espetáculos teatrais, cinematográficos, circenses, musicais, festivais, shows, recitais e congêneres",
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
             {
-                "item": "37.01",
-                "descricao": "Organização e administração de instituições, bem como execução de atividades artísticas, culturais, esportivas e de entretenimento",
+                "item": "12.02",
+                "descricao": "Exibições cinematográficas, televisivas, de rádio e de entretenimento em geral",
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
+            {
+                "item": "12.04",
+                "descricao": "Exibição de filmes e programações de televisão, rádio e demais meios audiovisuais",
+                "tributo": "ISS",
+                "anexo": "Anexo III",
+            },
+            {
+                "item": "12.05",
+                "descricao": (
+                    "Atividades culturais e artísticas, como música, dança, teatro, "
+                    "escultura, desenho, pintura, fotografia, artesanato e similares"
+                ),
+                "tributo": "ISS",
+                "anexo": "Anexo III",
+            },
+            {
+                "item": "12.13",
+                "descricao": (
+                    "Produção, organização, exibição e administração de "
+                    "atividades de lazer, cultura, esporte e entretenimento "
+                    "(inclusive clubes, academias, piscinas e afins)"
+                ),
+                "tributo": "ISS",
+                "anexo": "Anexo III",
+            },
+            {
+                "item": "—",
+                "descricao": (
+                    "Venda de ingressos, mercadorias e bebidas em eventos segue "
+                    "o ICMS (item 1.01 do Anexo I da LC 123/2006)"
+                ),
+                "tributo": "ICMS",
+                "anexo": "Anexo I",
+            },
         ],
-        "palavras_iss": ("cultural", "artistico", "artístico", "esporte", "entretenimento",
-                         "evento", "show", "espetaculo", "espetáculo"),
+        "palavras_icms": ("ingresso", "revenda", "bebida", "alimentacao", "alimentação", "bar"),
+        "palavras_iss": ("cultural", "artistico", "artístico", "artista", "esporte",
+                         "entretenimento", "evento", "show", "espetaculo", "espetáculo",
+                         "academia", "clube", "lazer"),
         "fundamento": (
-            "Itens 6.04 e 37.01 da LC 116/2003. Anexo III da LC 123/2006."
+            "Itens 12.01 a 12.13 da LC 116/2003 (atividades artísticas, culturais, "
+            "esportivas e de lazer). Anexo III da LC 123/2006. A venda de "
+            "ingressos e mercadorias no evento sujeita-se ao ICMS (Anexo I)."
         ),
     },
     {
@@ -671,16 +814,23 @@ EXPLICACOES_CNAE: list[dict] = [
                 "anexo": "Anexo III",
             },
             {
-                "item": "7.05",
-                "descricao": "Reparação e manutenção de máquinas, motores, aparelhos, veículos, equipamentos e instalações (exceto serviços de engenharia)",
+                "item": "14.06",
+                "descricao": (
+                    "Reparação e manutenção de máquinas, motores, aparelhos, "
+                    "equipamentos, instalações e congêneres (exceto serviços de "
+                    "engenharia e reforma de prédios)"
+                ),
                 "tributo": "ISS",
                 "anexo": "Anexo III",
             },
         ],
+        "palavras_icms": ("revenda de peca", "revenda de peça", "comercio de peca",
+                          "comércio de peça", "venda de pecas", "venda de peças"),
         "palavras_iss": ("reparacao", "reparação", "manutencao", "manutenção", "conserto",
                          "lavanderia", "cabeleireiro", "estetica", "estética"),
         "fundamento": (
-            "Itens 6.01, 14.05 e 7.05 da LC 116/2003. Anexo III da LC 123/2006."
+            "Itens 6.01, 14.05 e 14.06 da LC 116/2003. Anexo III da LC 123/2006. "
+            "A revenda de peças, quando destacada, acompanha o Anexo I."
         ),
     },
     {
@@ -693,9 +843,13 @@ EXPLICACOES_CNAE: list[dict] = [
         "itens_lc116": [
             {
                 "item": "17.02",
-                "descricao": "Serviços de assessoria, consultoria e apoio administrativo em geral",
+                "descricao": (
+                    "Datilografia, digitação, estenografia, expediente, secretária "
+                    "em geral, resposta audível, redação, edição, interpretação e "
+                    "tradução, bem como apoio administrativo"
+                ),
                 "tributo": "ISS",
-                "anexo": "Anexo III/V",
+                "anexo": "Anexo III",
             },
             {
                 "item": "17.05",
@@ -707,19 +861,28 @@ EXPLICACOES_CNAE: list[dict] = [
                 "item": "25.01",
                 "descricao": "Serviços de coleta, remessa ou entrega de correspondências, documentos, objetos, bens ou valores (inclusive pelos Correios e congêneres)",
                 "tributo": "ISS",
-                "anexo": "Anexo V",
+                "anexo": "Anexo III/V",
             },
         ],
         "palavras_iss": ("apoio administrativo", "administrativo", "cobranca", "cobrança",
                          "selecao", "seleção", "recrutamento", "terceirizacao", "terceirização"),
+        "palavras_iss": ("apoio administrativo", "administrativo", "cobranca", "cobrança",
+                         "selecao", "seleção", "recrutamento", "terceirizacao", "terceirização",
+                         "entrega", "correspondencia", "correspondência", "motoboy"),
         "fundamento": (
-            "Itens 17.02, 17.05 e 25.01 da LC 116/2003. Anexos III/V (apoio) e "
-            "Anexo IV (cessão de mão de obra) da LC 123/2006."
+            "Itens 17.02, 17.05 e 25.01 da LC 116/2003. Anexo III (apoio "
+            "administrativo e entrega), Anexo III/V (quando o fator R do Anexo V "
+            "for aplicável) e Anexo IV (cessão de mão de obra) da LC 123/2006."
         ),
     },
     {
-        "prefixos": ("8640", "864", "8650", "8660", "8690"),
+        "prefixos": ("8630", "8640", "8650", "8660", "8690"),
         "titulo": "Serviços de saúde e laboratórios",
+        "nota": (
+            "Não há correspondência direta na LC 116/2003 para estes CNAEs; "
+            "o enquadramento segue a natureza da atividade efetivamente prestada "
+            "e o fator R (Anexos III ou V da LC 123/2006)."
+        ),
         "resumo": (
             "Serviços de saúde em geral (laboratórios, clínicas, exames) são "
             "atividade de serviço (ISS). Laboratórios de análises clínicas/patologia "
@@ -737,11 +900,29 @@ EXPLICACOES_CNAE: list[dict] = [
                 "item": "4.02",
                 "descricao": "Análises clínicas, patologia, eletricidade médica, radioterapia, quimioterapia, ultrassonografia, ressonância, radiografia e demais exames complementares",
                 "tributo": "ISS",
-                "anexo": "Anexo III",
+                "anexo": "Anexo III/V",
             },
             {
                 "item": "4.03",
-                "descricao": "Serviços de prótese e órteses (confecção, reparo e venda a órgãos de saúde)",
+                "descricao": "Hospitais, clínicas, laboratórios e congêneres",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "4.04",
+                "descricao": "Instrumentação cirúrgica",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "4.05",
+                "descricao": "Enfermagem, inclusive serviços auxiliares",
+                "tributo": "ISS",
+                "anexo": "Anexo III/V",
+            },
+            {
+                "item": "4.13",
+                "descricao": "Serviços de prótese, inclusive dentária e ortodôntica",
                 "tributo": "ISS",
                 "anexo": "Anexo III/V",
             },
@@ -766,10 +947,18 @@ def _normalizar_codigo(cnae: str) -> str:
 
 
 def _buscar_curada(codigo: str) -> Optional[dict]:
-    """Procura a explicação curada pelo prefixo mais específico (mais dígitos)."""
+    """
+    Procura a explicação curada pelo prefixo mais específico (mais dígitos).
+
+    O campo opcional "exceto" lista prefixos mais longos que NÃO pertencem ao
+    grupo, mesmo que comecem pelo prefixo deste (ex.: grupo "86" genérico não
+    deve capturar os laboratórios 8640/8690, que têm explicação própria).
+    """
     melhor = None
     melhor_len = -1
     for item in EXPLICACOES_CNAE:
+        if any(codigo.startswith(ex) for ex in item.get("exceto", ())):
+            continue
         for prefixo in item["prefixos"]:
             if codigo.startswith(prefixo) and len(prefixo) > melhor_len:
                 melhor = item
@@ -777,10 +966,34 @@ def _buscar_curada(codigo: str) -> Optional[dict]:
     return melhor
 
 
+def _anexo_de(curada: dict, tributo: str) -> str:
+    """Anexo associado a um tributo (ICMS/ISS) na explicação curada."""
+    for item in curada.get("itens_lc116", ()):
+        if item.get("tributo") == tributo and item.get("anexo"):
+            return item["anexo"]
+    return ""
+
+
+def _anexos_citados(curada: dict) -> list:
+    """Todos os anexos (romanos) citados nos itens da explicação curada."""
+    anexos = []
+    for item in curada.get("itens_lc116", ()):
+        for letra in re.findall(r"\b(I{1,3}|IV|V)\b", item.get("anexo", "")):
+            if letra not in anexos:
+                anexos.append(letra)
+    return anexos
+
+
+def _rotulo_anexo(valor: str, padrao: str) -> str:
+    """Devolve 'Anexo X' sem duplicar o prefixo (ex.: 'Anexo III/V')."""
+    valor = (valor or padrao).strip()
+    return valor if valor.lower().startswith("anexo") else f"Anexo {valor}"
+
+
 def _interpretar_destino(curada: dict, descricao: str, anexo_sugerido: str) -> str:
     """
     Usa palavras-chave para dizer se, no caso concreto, a atividade tende a
-    ISS (Anexo III) ou ICMS (Anexo II). Devolve um dos rótulos ou "".
+    ISS ou ICMS. Devolve o texto indicando o tributo e o Anexo correspondente.
     """
     if not curada:
         return ""
@@ -790,14 +1003,17 @@ def _interpretar_destino(curada: dict, descricao: str, anexo_sugerido: str) -> s
     tem_icms = any(cnaes.normalizar(p) in texto for p in curada.get("palavras_icms", ()))
     tem_iss = any(cnaes.normalizar(p) in texto for p in curada.get("palavras_iss", ()))
 
+    anexo_icms = _rotulo_anexo(_anexo_de(curada, "ICMS"), "II")
+    anexo_iss = _rotulo_anexo(_anexo_de(curada, "ISS"), "III")
+
     if tem_icms and not tem_iss:
-        return "A tendência, pela descrição informada, é ICMS -> Anexo II."
+        return f"A tendência, pela descrição informada, é ICMS -> {anexo_icms}."
     if tem_iss and not tem_icms:
-        return "A tendência, pela descrição informada, é ISS -> Anexo III."
+        return f"A tendência, pela descrição informada, é ISS -> {anexo_iss}."
     if tem_iss and tem_icms:
         return ("A descrição traz palavras de ISS e de ICMS — confirme o DESTINO do "
-                "produto/serviço para decidir entre Anexo III e Anexo II.")
-    if anexo_sugerido in ("II", "III"):
+                f"produto/serviço para decidir entre {anexo_iss} e {anexo_icms}.")
+    if anexo_sugerido in ("I", "II", "III", "IV", "V"):
         return f"Enquadramento automático sugerido: Anexo {anexo_sugerido}."
     return ""
 
@@ -822,6 +1038,113 @@ def _nota_fator_r(candidatos: list) -> str:
     )
 
 
+def _itens_tabela_cnae(cnae: str) -> list:
+    """Itens da LC 116 vinculados ao CNAE na tabela editável (pode ser []).
+
+    A tabela Cnae_X_Item_Lista_Servicos vive no banco (cnae_itens_lc116) e é
+    mantida pela aba Tabelas. Aqui só lemos; se o banco não estiver acessível
+    caímos para o dicionário gerado, garantindo que nada quebre fora do
+    contexto de request.
+    """
+    codigo = _normalizar_codigo(cnae)
+    if not codigo:
+        return []
+
+    itens = []
+    try:
+        from flask import has_app_context
+        from database import itens_do_cnae
+
+        if has_app_context():
+            itens = itens_do_cnae(codigo)
+    except Exception:  # noqa: BLE001 - explicação nunca deve derrubar a rota
+        itens = []
+
+    if not itens:
+        itens = CNAE_ITEM.get(codigo) or []
+
+    return [
+        {
+            "item": sub.lstrip("0") or sub,
+            "descricao": ITEM_DESCRICAO.get(sub, ""),
+            "tributo": "ISS",
+            "anexo": "",
+            "origem": "tabela",
+        }
+        for sub in itens
+    ]
+
+
+def _itens_por_cnae(cnae: str, descricao: str, curados: list) -> list:
+    """Itens da LC 116 para o CNAE.
+
+    Precedência:
+      1) tabela oficial CNAE -> item (Cnae_X_Item_Lista_Servicos, editável na
+         aba Tabelas). É vínculo legal, determinístico: devolve todos os
+         itens do CNAE e nada mais;
+      2) CNAE fora da tabela: detalhamento curado, se existir;
+      3) sem nada disso, tenta casar pela DESCRIÇÃO da atividade.
+
+    O casamento por descrição NUNCA é somado aos itens da tabela: era o que
+    fazia o relatório sair com itens indevidos (ex.: CNAE de impressão
+    recebendo o item 39.01 de ourivesaria).
+    """
+    tabela = _itens_tabela_cnae(cnae)
+
+    if tabela:
+        return tabela
+
+    if not (descricao or "").strip():
+        return curados
+
+    try:
+        kb = _conhecimento()
+        subitem = kb.item_para_frase(descricao)
+    except Exception:  # noqa: BLE001 - explicação nunca deve quebrar a rota
+        return curados
+
+    if not subitem:
+        return curados
+
+    texto_legal = dict(ITENS_LC116).get(subitem, "")
+    casado = {
+        "item": subitem,
+        "descricao": texto_legal,
+        "tributo": "ISS",
+        "anexo": "",
+        "origem": "descricao",
+    }
+
+    # Resume o curado apenas para detectar divergência de item.
+    ja_listado = [i for i in curados if str(i.get("item", "")).strip() == subitem]
+    if ja_listado:
+        return curados
+
+    resultado = [casado] + [dict(i) for i in curados]
+    if curados:
+        citados = ", ".join(
+            str(i.get("item", "")).strip() for i in curados if i.get("item")
+        )
+        resultado[0]["ressalva"] = (
+            "A descrição informada corresponde a este item da LC 116/2003"
+            + (f" ({texto_legal})." if texto_legal else ".")
+            + (f" O detalhamento abaixo cita o item {citados}."
+               " Em caso de divergência, prevalece a descrição da atividade"
+               " efetivamente prestada." if citados else "")
+        )
+    return resultado
+
+
+def _conhecimento():
+    """Instância única do banco de conhecimento (cria o catálogo na 1ª vez)."""
+    global _KB
+    if _KB is None:
+        from enquadramento_db import Conhecimento
+        _KB = Conhecimento()
+        _KB.init()
+    return _KB
+
+
 def explicar(cnae: str, descricao: str = "") -> dict:
     """
     Monta a explicação do enquadramento de um CNAE.
@@ -841,6 +1164,10 @@ def explicar(cnae: str, descricao: str = "") -> dict:
     sugestao = cnaes.sugerir_anexo(cnae, descricao)
     candidatos = cnaes.anexos_candidatos(cnae, descricao)
 
+    # O enquadramento técnico vem do motor legal (enquadramento.py). O texto
+    # curado abaixo só acrescenta o detalhamento por item da LC 116.
+    tecnico = MOTOR.explicacao(cnae, descricao)
+
     curada = _buscar_curada(codigo) if codigo else None
 
     if curada:
@@ -853,26 +1180,39 @@ def explicar(cnae: str, descricao: str = "") -> dict:
         }
     else:
         resultado = {
-            "titulo": "Enquadramento genérico",
-            "resumo": (
-                "Não há regra específica cadastrada para este CNAE. O enquadramento "
-                "automático considera o grupo de atividade (divisão do Código) e as "
-                "palavras-chave da descrição. Confirme com atenção a natureza "
-                "comércio x indústria x serviço."
-            ),
+            "titulo": tecnico.get("titulo") or "Enquadramento genérico",
+            "resumo": tecnico.get("resumo", ""),
             "itens_lc116": [],
-            "fundamento": (
-                "Enquadramento por heurística. Em caso de dúvida, consulte um contador "
+            "fundamento": tecnico.get("fundamento") or (
+                "LC 123/2006, art. 18. Em caso de dúvida, consulte um contador "
                 "ou a Resolução CGSN aplicável ao ano."
             ),
             "curado": False,
         }
+
+    # Item da LC 116 definido pelo CNAE (tabela legal), nunca por palavra.
+    resultado["itens_lc116"] = _itens_por_cnae(
+        cnae, descricao, resultado.get("itens_lc116") or []
+    )
 
     if candidatos:
         resultado["resumo"] += (
             " Anexos possíveis para esta atividade: "
             + ", ".join(f"Anexo {a}" for a in candidatos) + "."
         )
+
+    # O texto curado é apenas apoio didático: se os anexos que ele cita no item
+    # de ISS/ICMS não coincidirem com o enquadramento legal, mostra a ressalva
+    # e mantém a sugestão técnica como fonte de verdade.
+    if curada:
+        anexos_texto = set(_anexos_citados(curada))
+        anexos_tecnicos = set(candidatos or ())
+        if anexos_texto and anexos_tecnicos and not (anexos_texto & anexos_tecnicos):
+            resultado["resumo"] += (
+                " Ressalva: o enquadramento calculado para este CNAE "
+                f"(Anexo {', Anexo '.join(candidatos)}) prevalece sobre a "
+                "indicação geral desta explicação."
+            )
 
     resultado.update({
         "cnae": cnaes.formatar_cnae(cnae),
@@ -895,6 +1235,7 @@ def listar_explicacoes() -> list:
         {
             "titulo": item.get("titulo", ""),
             "prefixos": list(item.get("prefixos", ())),
+            "exceto": list(item.get("exceto", ())),
             "fundamento": item.get("fundamento", ""),
             "itens_lc116": item.get("itens_lc116", []),
         }

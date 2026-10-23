@@ -14,6 +14,9 @@ env/
 
 # Banco de dados SQLite (dados do usuário)
 simples_app/instance/*.db
+*.db
+*.sqlite
+*.sqlite3
 
 # Documentos fiscais enviados pelo usuário (extratos, notas, planilhas)
 extrato/
@@ -21,6 +24,10 @@ extratos/
 *.pdf
 *.xml
 *.xlsx
+
+# Exceto as planilhas públicas de referência (necessárias ao enquadramento)
+!CNAE_Subclasses_2_3_Estrutura_Detalhada_DESCRICOES.xlsx
+!Cnae_X_Item_Lista_Servicos.xlsx
 
 # Backups manuais
 _backup/
@@ -34,6 +41,17 @@ _test_*.py
 _organizar_final.py
 consertar_banco.py
 excel_output.txt
+resumo_build.txt
+
+# Rascunhos descartáveis (scripts de bastidor e dumps)
+/_*
+!/_inspect.py
+!/_validar_reparticao.py
+!/_mover_rascunhos.ps1
+simples_app/_*
+
+# Arquivo morto de limpezas
+/_arquivo/
 
 # IDE / editor
 .vscode/

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block titulo %}CNAE × Anexo · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>CNAE × Anexo do Simples</h1>
+    <p>Relação que define o <strong>anexo</strong> da atividade no cadastro, no Excel e no PDF.</p>
+  </div>
+</div>
+
+<div class="flash aviso">
+  Alterar o anexo aqui vale <strong>imediatamente</strong> para todo o sistema, sem
+  republicar o projeto — esta tabela tem <strong>precedência sobre a regra fixa</strong> do motor.
+  Informe o CNAE só com números (ex.: <strong>1813099</strong>). No anexo, use uma ou duas
+  opções, na ordem de precedência: <strong>II</strong>, <strong>III</strong>, <strong>IV</strong>,
+  <strong>V</strong>, <strong>I</strong>, ou combinações como <strong>V/III</strong> e
+  <strong>I/III</strong>. Para devolver o CNAE à regra fixa, exclua a linha.
+</div>
+
+<form method="get" class="form-busca" style="display:flex;gap:8px;margin:12px 0">
+  <input type="text" name="busca" value="{{ busca }}"
+         placeholder="Filtrar por CNAE (1813099 ou 1813), anexo (V/III) ou descrição"
+         style="flex:1">
+  <button type="submit" class="btn">🔎 Filtrar</button>
+  {% if busca %}
+  <a class="btn secundario" href="{{ url_for('admin_cnae_anexo') }}">Limpar</a>
+  {% endif %}
+</form>
+
+<p style="margin-bottom:8px">
+  {% if busca %}
+    <strong>{{ total }}</strong> registro(s) encontrado(s) para “{{ busca }}”.
+  {% else %}
+    Mostrando os primeiros <strong>{{ total }}</strong> registros. Use o filtro para achar um CNAE específico.
+  {% endif %}
+</p>
+
+<form method="post">
+  <input type="hidden" name="fluxo" value="editar">
+  <input type="hidden" name="busca" value="{{ busca }}">
+
+  <div class="card">
+    <div class="tabela-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:130px">CNAE</th>
+            <th>Anexo</th>
+            <th>Descrição da subclasse</th>
+            <th style="width:100px">Origem</th>
+            <th style="width:90px">Atualizado</th>
+            <th style="width:60px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in registros %}
+          <tr>
+            <td>
+              <input type="hidden" name="id_{{ r.id }}" value="{{ r.id }}">
+              <strong>{{ r.cnae }}</strong>
+            </td>
+            <td>
+              <input type="text" name="anexo_{{ r.id }}" value="{{ r.anexo }}"
+                     placeholder="II" style="width:90px">
+            </td>
+            <td style="font-size:.9em;color:#555">{{ r.descricao or '' }}</td>
+            <td style="font-size:.85em;color:#777">
+              {% if r.origem == 'humano' %}<span style="color:#0a6b3d">manual</span>{% else %}planilha{% endif %}
+            </td>
+            <td style="font-size:.85em;color:#777">{{ (r.atualizado_em or '')[:16] }}</td>
+            <td>
+              <button type="submit" class="btn" formnovalidate
+                      formaction="{{ url_for('admin_cnae_anexo') }}"
+                      name="excluir_id" value="{{ r.id }}"
+                      style="background:#b42318;padding:2px 8px"
+                      onclick="return confirm('Excluir {{ r.cnae }}? O CNAE passa a usar a regra fixa do motor.');"
+                      title="Excluir este registro">🗑</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" style="text-align:center;padding:20px;color:#777">
+              Nenhum registro encontrado.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="acoes" style="margin-top:6px">
+    <button type="submit" class="btn">💾 Salvar alterações</button>
+    <a class="btn secundario" href="{{ url_for('admin_tabelas') }}">Voltar às faixas</a>
+    <a class="btn secundario" href="{{ url_for('admin') }}">Voltar</a>
+  </div>
+</form>
+
+<div class="card" style="margin-top:24px">
+  <h2>Incluir / corrigir CNAE</h2>
+  <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+    <input type="hidden" name="fluxo" value="novo">
+    <input type="hidden" name="busca" value="{{ busca }}">
+    <label>CNAE<br>
+      <input type="text" name="cnae_anexo_novo" placeholder="1813099" style="width:140px">
+    </label>
+    <label>Anexo<br>
+      <input type="text" name="novo_anexo" placeholder="V/III" style="width:100px">
+    </label>
+    <label>Descrição (opcional)<br>
+      <input type="text" name="nova_descricao" placeholder="Serviços de impressão" style="width:280px">
+    </label>
+    <button type="submit" class="btn">➕ Incluir</button>
+  </form>
+  <p style="font-size:.85em;color:#777;margin-top:8px">
+    Se o CNAE já existir na tabela, o anexo informado substitui o atual.
+  </p>
+</div>
+{% endblock %}

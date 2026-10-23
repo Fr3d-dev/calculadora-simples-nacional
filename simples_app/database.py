@@ -8,6 +8,7 @@ ferramenta simples e sem dependências externas além do Flask.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from datetime import datetime
@@ -94,6 +95,35 @@ CREATE TABLE IF NOT EXISTS tabelas_base (
     UNIQUE(anexo, faixa)
 );
 
+-- Vínculo oficial CNAE -> item da LC 116/2003 (Cnae_X_Item_Lista_Servicos).
+-- Editável pela aba Tabelas, para corrigir um vínculo sem republicar o app.
+CREATE TABLE IF NOT EXISTS cnae_itens_lc116 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnae TEXT NOT NULL,
+    item TEXT NOT NULL,
+    ordem INTEGER NOT NULL DEFAULT 0,
+    atualizado_em TEXT,
+    UNIQUE(cnae, item)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cnae_itens_cnae ON cnae_itens_lc116(cnae);
+
+-- Relação CNAE x ANEXO (base da planilha CNAE_Subclasses_..._DESCRICOES).
+-- Precedência sobre a regra fixa do motor: o que estiver aqui manda no
+-- cadastro da empresa. Editável na aba Tabelas, sem republicar o app.
+CREATE TABLE IF NOT EXISTS cnae_anexos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnae TEXT NOT NULL,
+    descricao TEXT,
+    anexo TEXT NOT NULL,          -- "II", "V/III", "I/III" ...
+    anexos TEXT NOT NULL,         -- JSON: ["V","III"] (ordem = precedência)
+    origem TEXT NOT NULL DEFAULT 'planilha',
+    atualizado_em TEXT,
+    UNIQUE(cnae)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cnae_anexos_cnae ON cnae_anexos(cnae);
+
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER,
@@ -152,6 +182,8 @@ def init_db():
         pass  # coluna já existe
     db.commit()
     _seed_tabelas_base(db)
+    _seed_cnae_itens_lc116(db)
+    _seed_cnae_anexos(db)
 
 
 def _seed_tabelas_base(db: sqlite3.Connection):
@@ -166,6 +198,33 @@ def _seed_tabelas_base(db: sqlite3.Connection):
                     aliquota_nominal, valor_deduzir)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (anexo, idx, str(inf), str(sup), str(aliq), str(ded)),
+            )
+    db.commit()
+
+
+def _seed_cnae_itens_lc116(db: sqlite3.Connection):
+    """Popula o vínculo CNAE -> item LC 116 a partir de cnae_item_lc116.py.
+
+    Só roda quando a tabela está vazia: depois da primeira carga, o banco passa
+    a ser a fonte da verdade (e o que o usuário editar na aba Tabelas prevalece).
+    """
+    try:
+        total = db.execute("SELECT COUNT(*) FROM cnae_itens_lc116").fetchone()[0]
+        if total:
+            return
+        from cnae_item_lc116 import CNAE_ITEM
+    except Exception as exc:  # noqa: BLE001 - não impede a subida do app
+        print(f"  >>> Seed CNAE x Item LC 116 ignorado: {exc}")
+        return
+
+    agora = datetime.now().isoformat(timespec="seconds")
+    for cnae, itens in CNAE_ITEM.items():
+        for ordem, item in enumerate(itens):
+            db.execute(
+                """INSERT OR IGNORE INTO cnae_itens_lc116
+                   (cnae, item, ordem, atualizado_em)
+                   VALUES (?, ?, ?, ?)""",
+                (str(cnae).strip(), str(item).strip(), ordem, agora),
             )
     db.commit()
 
@@ -444,6 +503,297 @@ def atualizar_tabela_base(tabela_id, limite_inferior, limite_superior,
            aliquota_nominal=?, valor_deduzir=? WHERE id=?""",
         (limite_inferior, limite_superior, aliquota_nominal, valor_deduzir, tabela_id),
     )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Vínculo CNAE -> item da LC 116/2003 (administração)
+# ---------------------------------------------------------------------------
+
+def _normalizar_cnae(cnae) -> str:
+    """Deixa só os dígitos do CNAE (ex.: '1813-0/99' -> '1813099')."""
+    return "".join(c for c in str(cnae or "") if c.isdigit())
+
+
+def listar_cnae_itens(busca=None, limite=500, conn=None):
+    """Vínculos CNAE -> item, filtrando por dígitos ou prefixo do item."""
+    db = conn or get_db()
+    if busca and busca.strip():
+        termo = busca.strip()
+        digitos = _normalizar_cnae(termo)
+        if digitos:
+            return db.execute(
+                """SELECT * FROM cnae_itens_lc116
+                   WHERE cnae LIKE ? OR item = ?
+                   ORDER BY cnae, ordem, item LIMIT ?""",
+                (f"%{digitos}%", termo, limite),
+            ).fetchall()
+        return db.execute(
+            """SELECT * FROM cnae_itens_lc116
+               WHERE item LIKE ? ORDER BY cnae, ordem, item LIMIT ?""",
+            (f"%{termo}%", limite),
+        ).fetchall()
+    return db.execute(
+        "SELECT * FROM cnae_itens_lc116 ORDER BY cnae, ordem, item LIMIT ?",
+        (limite,),
+    ).fetchall()
+
+
+def itens_do_cnae(cnae, conn=None) -> list:
+    """Itens da LC 116 vinculados a um CNAE, na ordem cadastrada."""
+    db = conn or get_db()
+    codigo = _normalizar_cnae(cnae)
+    if not codigo:
+        return []
+    linhas = db.execute(
+        """SELECT item FROM cnae_itens_lc116
+           WHERE cnae=? ORDER BY ordem, item""",
+        (codigo,),
+    ).fetchall()
+    return [r["item"] for r in linhas]
+
+
+def todos_cnae_itens(conn=None) -> dict:
+    """Mapa {cnae: [itens]} de toda a tabela (uso em memória/explicações)."""
+    db = conn or get_db()
+    mapa = {}
+    for linha in db.execute(
+        "SELECT cnae, item FROM cnae_itens_lc116 ORDER BY cnae, ordem, item"
+    ):
+        mapa.setdefault(linha["cnae"], []).append(linha["item"])
+    return mapa
+
+
+def atualizar_cnae_item(registro_id, cnae, item, conn=None):
+    """Edita o CNAE e/ou o item de um vínculo, preservando a ordem."""
+    db = conn or get_db()
+    codigo = _normalizar_cnae(cnae)
+    novo_item = (item or "").strip()
+    if not codigo or not novo_item:
+        raise ValueError("Informe o CNAE e o item da LC 116.")
+    db.execute(
+        """UPDATE cnae_itens_lc116 SET cnae=?, item=?, atualizado_em=?
+           WHERE id=?""",
+        (codigo, novo_item, datetime.now().isoformat(timespec="seconds"),
+         registro_id),
+    )
+    db.commit()
+
+
+def adicionar_cnae_item(cnae, item, conn=None) -> int:
+    """Inclui um vínculo. Se já existir, mantém o registro existente."""
+    db = conn or get_db()
+    codigo = _normalizar_cnae(cnae)
+    novo_item = (item or "").strip()
+    if not codigo or not novo_item:
+        raise ValueError("Informe o CNAE e o item da LC 116.")
+    proxima = db.execute(
+        "SELECT COALESCE(MAX(ordem), -1) + 1 FROM cnae_itens_lc116 WHERE cnae=?",
+        (codigo,),
+    ).fetchone()[0]
+    cur = db.execute(
+        """INSERT OR IGNORE INTO cnae_itens_lc116
+           (cnae, item, ordem, atualizado_em) VALUES (?, ?, ?, ?)""",
+        (codigo, novo_item, proxima,
+         datetime.now().isoformat(timespec="seconds")),
+    )
+    db.commit()
+    return cur.lastrowid
+
+
+def excluir_cnae_item(registro_id, conn=None):
+    db = conn or get_db()
+    db.execute("DELETE FROM cnae_itens_lc116 WHERE id=?", (registro_id,))
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Relação CNAE x ANEXO (base editável do enquadramento)
+# ---------------------------------------------------------------------------
+
+# Planilha de origem, lida uma única vez quando a tabela está vazia.
+PLANILHA_CNAE_ANEXO = "CNAE_Subclasses_2_3_Estrutura_Detalhada_DESCRICOES.xlsx"
+
+# Ordem canônica dos anexos (usada quando o texto não deixa a ordem clara).
+_ORDEM_ANEXOS = ["I", "II", "III", "IV", "V"]
+
+
+def normalizar_anexo_expressao(texto) -> tuple:
+    """Converte "Anexo V / Anexo III" em ("V/III", ["V", "III"]).
+
+    Aceita as formas que aparecem no cadastro e na planilha:
+    "III", "Anexo II", "Anexo V / Anexo III", "I/III", "V,III".
+    A ordem informada é preservada: o primeiro é o anexo sugerido.
+    """
+    import re
+
+    bruto = str(texto or "").upper()
+    # Captura "ANEXO II" e também "II" solto, sempre como palavra isolada.
+    tokens = re.findall(r"[A-Z]+", bruto)
+    anexos = []
+    for token in tokens:
+        if token == "ANEXO":
+            continue
+        if token in _ORDEM_ANEXOS and token not in anexos:
+            anexos.append(token)
+    if not anexos:
+        return "", []
+    return "/".join(anexos), anexos
+
+
+def _seed_cnae_anexos(db: sqlite3.Connection):
+    """Carrega a relação CNAE x ANEXO da planilha, se a tabela estiver vazia.
+
+    Depois da primeira carga o BANCO é a fonte da verdade: o que o usuário
+    corrigir em Tabelas > CNAE x Anexo prevalece sobre a planilha e sobre a
+    regra fixa do motor, sem precisar republicar o app.
+    """
+    try:
+        total = db.execute("SELECT COUNT(*) FROM cnae_anexos").fetchone()[0]
+        if total:
+            return
+        import os as _os
+        from openpyxl import load_workbook
+
+        base = _os.path.dirname(_os.path.abspath(__file__))
+        caminho = None
+        for pasta in (base, _os.path.dirname(base)):
+            candidato = _os.path.join(pasta, PLANILHA_CNAE_ANEXO)
+            if _os.path.exists(candidato):
+                caminho = candidato
+                break
+        if not caminho:
+            print(f"  >>> Seed CNAE x ANEXO ignorado: {PLANILHA_CNAE_ANEXO} não encontrada.")
+            return
+
+        wb = load_workbook(caminho, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+    except Exception as exc:  # noqa: BLE001 - não impede a subida do app
+        print(f"  >>> Seed CNAE x ANEXO ignorado: {exc}")
+        return
+
+    agora = datetime.now().isoformat(timespec="seconds")
+    carregados = 0
+    for linha in ws.iter_rows(min_row=2, values_only=True):
+        if not linha or not linha[0]:
+            continue
+        codigo = _normalizar_cnae(linha[0])
+        if len(codigo) != 7:
+            continue
+        descricao = " ".join(str(linha[1] or "").split())
+        expressao, anexos = normalizar_anexo_expressao(linha[2] if len(linha) > 2 else "")
+        if not anexos:
+            # Sem anexo definido (extrativismo, administração pública etc.):
+            # guardamos a descrição para o cadastro, sem inventar enquadramento.
+            expressao, anexos = "", []
+        db.execute(
+            """INSERT OR IGNORE INTO cnae_anexos
+               (cnae, descricao, anexo, anexos, origem, atualizado_em)
+               VALUES (?, ?, ?, ?, 'planilha', ?)""",
+            (codigo, descricao, expressao,
+             json.dumps(anexos, ensure_ascii=False), agora),
+        )
+        carregados += 1
+    db.commit()
+    print(f"  >>> CNAE x ANEXO: {carregados} subclasse(s) carregada(s) da planilha.")
+
+
+def listar_cnae_anexos(busca=None, limite=2000, conn=None):
+    """Relação CNAE x ANEXO, filtrando por dígitos do CNAE ou pelo anexo."""
+    db = conn or get_db()
+    if busca and busca.strip():
+        termo = busca.strip()
+        digitos = _normalizar_cnae(termo)
+        if digitos:
+            return db.execute(
+                """SELECT * FROM cnae_anexos
+                   WHERE cnae LIKE ? ORDER BY cnae LIMIT ?""",
+                (f"%{digitos}%", limite),
+            ).fetchall()
+        return db.execute(
+            """SELECT * FROM cnae_anexos
+               WHERE anexo LIKE ? OR descricao LIKE ? ORDER BY cnae LIMIT ?""",
+            (f"%{termo.upper()}%", f"%{termo}%", limite),
+        ).fetchall()
+    return db.execute(
+        "SELECT * FROM cnae_anexos ORDER BY cnae LIMIT ?", (limite,)
+    ).fetchall()
+
+
+def buscar_cnae_anexo(cnae, conn=None):
+    """Registro de anexo de um CNAE (ou None). Usado pelo motor."""
+    db = conn or get_db()
+    codigo = _normalizar_cnae(cnae)
+    if len(codigo) != 7:
+        return None
+    return db.execute(
+        "SELECT * FROM cnae_anexos WHERE cnae=?", (codigo,)
+    ).fetchone()
+
+
+def todos_cnae_anexos(conn=None) -> dict:
+    """Mapa {cnae: {"anexo": ..., "anexos": [...], "descricao": ...}}."""
+    db = conn or get_db()
+    mapa = {}
+    for linha in db.execute(
+        "SELECT cnae, descricao, anexo, anexos FROM cnae_anexos"
+    ):
+        try:
+            anexos = json.loads(linha["anexos"] or "[]")
+        except Exception:  # noqa: BLE001
+            anexos = []
+        mapa[linha["cnae"]] = {
+            "descricao": linha["descricao"] or "",
+            "anexo": linha["anexo"] or "",
+            "anexos": anexos,
+        }
+    return mapa
+
+
+def atualizar_cnae_anexo(registro_id, anexo, conn=None):
+    """Corrige o anexo de um CNAE. Vale imediatamente para todo o sistema."""
+    db = conn or get_db()
+    expressao, anexos = normalizar_anexo_expressao(anexo)
+    db.execute(
+        """UPDATE cnae_anexos
+           SET anexo=?, anexos=?, origem='humano', atualizado_em=?
+           WHERE id=?""",
+        (expressao, json.dumps(anexos, ensure_ascii=False),
+         datetime.now().isoformat(timespec="seconds"), registro_id),
+    )
+    db.commit()
+
+
+def adicionar_cnae_anexo(cnae, anexo, descricao="", conn=None) -> int:
+    """Inclui (ou atualiza) a relação de um CNAE com o anexo."""
+    db = conn or get_db()
+    codigo = _normalizar_cnae(cnae)
+    if len(codigo) != 7:
+        raise ValueError("Informe o CNAE com 7 dígitos (ex.: 1813099).")
+    expressao, anexos = normalizar_anexo_expressao(anexo)
+    if not anexos:
+        raise ValueError("Informe o anexo (ex.: II ou V/III).")
+    agora = datetime.now().isoformat(timespec="seconds")
+    db.execute(
+        """INSERT INTO cnae_anexos
+           (cnae, descricao, anexo, anexos, origem, atualizado_em)
+           VALUES (?, ?, ?, ?, 'humano', ?)
+           ON CONFLICT(cnae) DO UPDATE SET
+               anexo=excluded.anexo, anexos=excluded.anexos,
+               origem='humano', atualizado_em=excluded.atualizado_em""",
+        (codigo, " ".join((descricao or "").split()), expressao,
+         json.dumps(anexos, ensure_ascii=False), agora),
+    )
+    db.commit()
+    return db.execute(
+        "SELECT id FROM cnae_anexos WHERE cnae=?", (codigo,)
+    ).fetchone()[0]
+
+
+def excluir_cnae_anexo(registro_id, conn=None):
+    """Remove a linha: o CNAE volta a usar a regra fixa do motor."""
+    db = conn or get_db()
+    db.execute("DELETE FROM cnae_anexos WHERE id=?", (registro_id,))
     db.commit()
 
 
