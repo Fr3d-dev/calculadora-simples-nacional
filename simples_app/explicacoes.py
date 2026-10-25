@@ -1038,6 +1038,31 @@ def _nota_fator_r(candidatos: list) -> str:
     )
 
 
+def _texto_lc116(subitem: str) -> str:
+    """Texto oficial INTEGRAL do item/subitem da LC 116/2003.
+
+    Preferência: ITENS_LC116 (itens_lc116.py, texto completo da lei).
+    Fallback: ITEM_DESCRICAO (cnae_item_lc116.py), que é uma versão
+    resumida/resumida da tabela gerada — usada só quando o item não existe
+    no texto oficial.
+
+    Os códigos da tabela vêm sem o zero à esquerda ("1.05"); o texto oficial
+    usa dois dígitos ("01.05"), então normalizamos para o formato do catálogo.
+    """
+    codigo = (subitem or "").strip()
+    if not codigo:
+        return ""
+
+    oficial = dict(ITENS_LC116)
+    prefixo, _, sufixo = codigo.partition(".")
+    if sufixo and prefixo.isdigit() and len(prefixo) == 1:
+        candidato = f"0{prefixo}.{sufixo}"
+        if candidato in oficial:
+            return oficial[candidato]
+
+    return oficial.get(codigo) or ITEM_DESCRICAO.get(codigo, "")
+
+
 def _itens_tabela_cnae(cnae: str) -> list:
     """Itens da LC 116 vinculados ao CNAE na tabela editável (pode ser []).
 
@@ -1066,7 +1091,7 @@ def _itens_tabela_cnae(cnae: str) -> list:
     return [
         {
             "item": sub.lstrip("0") or sub,
-            "descricao": ITEM_DESCRICAO.get(sub, ""),
+            "descricao": _texto_lc116(sub),
             "tributo": "ISS",
             "anexo": "",
             "origem": "tabela",
@@ -1106,7 +1131,7 @@ def _itens_por_cnae(cnae: str, descricao: str, curados: list) -> list:
     if not subitem:
         return curados
 
-    texto_legal = dict(ITENS_LC116).get(subitem, "")
+    texto_legal = _texto_lc116(subitem)
     casado = {
         "item": subitem,
         "descricao": texto_legal,

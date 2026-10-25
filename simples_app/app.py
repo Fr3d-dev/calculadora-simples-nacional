@@ -1322,14 +1322,20 @@ def registrar_rotas(app: Flask):
                 # Um registro por item da LC 116, repetindo o CNAE (o código
                 # do item fica na mesma linha, à frente do CNAE). Usa apenas o
                 # código do item (ex.: "13.05"), sem o sufixo descritivo.
+                # Na coluna "Descrição" vai a descrição do ITEM da LC 116
+                # (texto oficial), coerente com o código exibido na coluna
+                # "Item"; sem descrição do item, cai para a do CNAE.
                 # As colunas NBS/CClassTrib/IndOper ficam em branco para
                 # preenchimento manual posterior.
                 for item in itens:
                     codigo_item = _codigo_item_lc116(item.get("item", ""))
+                    descricao_item = (
+                        (item.get("descricao") or "").strip() or descricao
+                    )
                     ws.append([
                         linha.get("codigo", ""),
                         codigo_item or "—",
-                        descricao,
+                        descricao_item,
                         "",
                         "",
                         "",
