@@ -70,6 +70,13 @@ ANO_REFERENCIA = "2026"
 SIMPLES_EMPRESA = "Minha Empresa LTDA"
 CNPJ_EMPRESA = "00.000.000/0001-00"
 
+# Campos editáveis da relação NBS x cClassTrib x INDOP (aba Tabelas).
+NBS_CAMPOS = [
+    "item_lc116", "descricao_item", "nbs", "descricao_nbs",
+    "ps_onerosa", "adq_exterior", "indop", "local_incidencia",
+    "cclasstrib", "nome_cclasstrib",
+]
+
 
 def create_app() -> Flask:
     app = Flask(__name__, instance_relative_config=True)
@@ -1370,6 +1377,122 @@ def registrar_rotas(app: Flask):
             ),
         )
 
+    # -------------------------- Relatório Reforma ----------------------------
+    # Reaproveita o relatório atual, mas preenche NBS / cClassTrib / IndOper a
+    # partir da Relação NBS (editável em Administração > Tabelas). Rotas e
+    # funções separadas para não afetar o relatório existente.
+
+    def _dados_relatorio_reforma(empresa, regime="hibrido"):
+        """Linhas do Relatório Reforma para a empresa, já com a classificação.
+
+        Cada item de serviço com mais de uma classificação NBS/cClassTrib/
+        IndOper gera uma linha por classificação, uma abaixo da outra.
+        O `regime` filtra as classificações: "normal" (Simples Normal) mantém
+        só cClassTrib 000001; "hibrido" mantém todas as relações do item.
+        """
+        import relatorio_reforma as reforma
+
+        contexto = _dados_relatorio_empresa(empresa)
+        codigos = set()
+        for linha in contexto["linhas_cnae"]:
+            explicacao = linha.get("explicacao") or {}
+            for item in explicacao.get("itens_lc116") or []:
+                codigo = reforma.normalizar_item(item.get("item", ""))
+                if codigo:
+                    codigos.add(codigo)
+
+        registros_nbs = db.relacao_nbs_por_itens(sorted(codigos))
+
+        # A relação usa "01.01"; o relatório também. Normalizamos os dois
+        # lados para casar "1.01" com "01.01".
+        normalizados = []
+        for registro in registros_nbs:
+            dados = dict(registro)
+            dados["item_lc116"] = reforma.normalizar_item(
+                registro["item_lc116"])
+            normalizados.append(dados)
+
+        return contexto, reforma.montar_linhas(
+            contexto["linhas_cnae"], normalizados, reforma.normalizar_regime(regime))
+
+    @app.route("/relatorios/reforma")
+    @permissao_required("ver_relatorios")
+    @login_required
+    def relatorios_reforma():
+        """Prévia do Relatório Reforma (NBS, cClassTrib e IndOper preenchidos)."""
+        import relatorio_reforma as reforma
+
+        alvo = empresa_ativa()
+        if not alvo:
+            flash("Selecione uma empresa antes de gerar o relatório.", "aviso")
+            return redirect(url_for("relatorios"))
+
+        regime = reforma.normalizar_regime(request.args.get("regime"))
+        contexto, linhas = _dados_relatorio_reforma(alvo, regime)
+        sem_classificacao = sum(
+            1 for linha in linhas
+            if linha["Local incidência IBS"] == reforma.SEM_RELACAO
+        )
+        return render_template(
+            "relatorio_reforma.html",
+            ident=contexto["identificacao"],
+            linhas=linhas,
+            cabecalho=reforma.CABECALHO,
+            sem_classificacao=sem_classificacao,
+            regime=regime,
+            nome_regime=reforma.REGIMES[regime],
+        )
+
+    @app.route("/relatorios/reforma/excel")
+    @permissao_required("ver_relatorios")
+    @login_required
+    def relatorios_reforma_excel():
+        """Baixa o Relatório Reforma em .xlsx."""
+        import io
+
+        import relatorio_reforma as reforma
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+
+        alvo = empresa_ativa()
+        if not alvo:
+            flash("Selecione uma empresa antes de gerar o relatório.", "aviso")
+            return redirect(url_for("relatorios"))
+
+        regime = reforma.normalizar_regime(request.args.get("regime"))
+        contexto, linhas = _dados_relatorio_reforma(alvo, regime)
+        ident = contexto["identificacao"]
+
+        wb = Workbook()
+        reforma.preencher_planilha(wb.active, linhas, ident, regime)
+
+        # Planilha auxiliar com uma linha por combinação, sem repetir o item
+        # em linhas de continuação (útil para filtros e tabelas dinâmicas).
+        ws2 = wb.create_sheet("Por item")
+        ws2.append(reforma.CABECALHO)
+        for celula in ws2[1]:
+            celula.font = Font(bold=True)
+        for linha in linhas:
+            ws2.append([linha.get(coluna, "") for coluna in reforma.CABECALHO])
+
+        arquivo = io.BytesIO()
+        wb.save(arquivo)
+        arquivo.seek(0)
+
+        nome = (ident["cnpj"] or f"empresa_{ident['empresa_id']}")
+        nome = nome.replace("/", "-").replace(".", "")
+        db.registrar_log(g.usuario, f"relatorio_reforma_{regime}",
+                         ident["razao_social"] or str(ident["empresa_id"]))
+        return send_file(
+            arquivo,
+            as_attachment=True,
+            download_name=f"relatorio_reforma_{regime}_{nome}.xlsx",
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        )
+
     @app.route("/relatorios/pdf")
     @permissao_required("ver_relatorios")
     @login_required
@@ -1940,6 +2063,85 @@ def registrar_rotas(app: Flask):
             registros=registros,
             busca=busca,
             total=len(registros),
+        )
+
+    # ----------------- Administração: relação NBS x cClassTrib x INDOP -------
+
+    @app.route("/admin/tabelas/relacao-nbs", methods=["GET", "POST"])
+    @permissao_required("editar_tabelas")
+    @admin_required
+    def admin_relacao_nbs():
+        """Edita a relação NBS x cClassTrib x Indicador de Operação (INDOP).
+
+        Base da planilha RELAÇÃO NBS Cclasstrib e Ind Operac, agora no banco:
+        corrigir ou incluir uma linha aqui vale na hora, sem alterar código
+        nem republicar o app.
+        """
+        if request.method == "POST":
+            fluxo = "excluir" if request.form.get("excluir_id") else request.form.get(
+                "fluxo", "editar"
+            )
+            try:
+                if fluxo == "excluir":
+                    registro_id = int(
+                        request.form.get("excluir_id")
+                        or request.form.get("id", "0")
+                        or 0
+                    )
+                    db.excluir_relacao_nbs(registro_id)
+                    db.registrar_log(
+                        g.usuario, "excluir_relacao_nbs",
+                        f"Relação NBS {registro_id}",
+                    )
+                    flash("Linha excluída.", "ok")
+
+                elif fluxo == "novo":
+                    dados = {
+                        campo: request.form.get(f"novo_{campo}", "")
+                        for campo in NBS_CAMPOS
+                    }
+                    db.adicionar_relacao_nbs(dados)
+                    db.registrar_log(
+                        g.usuario, "adicionar_relacao_nbs",
+                        f"{dados.get('nbs', '')} / {dados.get('cclasstrib', '')}",
+                    )
+                    flash("Linha incluída.", "ok")
+
+                else:
+                    alterados = 0
+                    for key in [k for k in request.form if k.startswith("id_")]:
+                        registro_id = int(key[3:])
+                        dados = {
+                            campo: request.form.get(f"{campo}_{registro_id}", "")
+                            for campo in NBS_CAMPOS
+                        }
+                        if not dados["nbs"].strip() and not dados["cclasstrib"].strip():
+                            continue
+                        db.atualizar_relacao_nbs(registro_id, dados)
+                        alterados += 1
+                    db.registrar_log(
+                        g.usuario, "editar_relacao_nbs",
+                        f"Relação NBS ({alterados} linha(s))",
+                    )
+                    flash(f"{alterados} linha(s) atualizada(s).", "ok")
+            except Exception as exc:  # noqa: BLE001
+                flash(f"Erro ao salvar: {exc}", "erro")
+
+            busca = request.form.get("busca", "").strip()
+            return redirect(url_for("admin_relacao_nbs", busca=busca or None))
+
+        busca = (request.args.get("busca") or "").strip()
+        registros = db.listar_relacao_nbs(busca or None, limite=5000)
+        import relacao_nbs as fonte
+        return render_template(
+            "admin_relacao_nbs.html",
+            registros=registros,
+            busca=busca,
+            total=len(registros),
+            total_geral=db.contar_relacao_nbs(),
+            colunas=fonte.COLUNAS,
+            rotulos=fonte.ROTULOS,
+            nome_arquivo=fonte.NOME_ARQUIVO,
         )
 
     # ------------------------------ Logs -------------------------------------

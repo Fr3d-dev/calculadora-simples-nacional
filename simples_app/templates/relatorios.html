@@ -62,6 +62,54 @@
 </div>
 
 <div class="card" style="margin-top:18px">
+  <h2>Relatório Reforma</h2>
+  <p class="texto-suave">
+    Mesma estrutura do Excel acima, mas com <strong>NBS</strong>,
+    <strong>CClassTrib</strong> e <strong>IndOper</strong> preenchidos a partir da
+    Relação NBS, de acordo com o item de serviço. Se um item tiver mais de uma
+    classificação, cada uma sai em uma linha própria, uma abaixo da outra.
+  </p>
+  <div class="acoes" style="margin-top:14px">
+    <button type="button" class="btn" onclick="document.getElementById('modal-reforma').classList.add('aberto')">📄 Gerar Relatório Reforma</button>
+  </div>
+</div>
+
+<div id="modal-reforma" class="modal-reforma" aria-hidden="true">
+  <div class="modal-reforma-caixa" role="dialog" aria-modal="true" aria-labelledby="modal-reforma-titulo">
+    <h2 id="modal-reforma-titulo">Qual o regime da empresa?</h2>
+    <p class="texto-suave">
+      A escolha define quais classificações entram no relatório.
+    </p>
+    <div class="opcoes-regime">
+      <a class="opcao-regime" href="{{ url_for('relatorios_reforma', regime='normal') }}">
+        <strong>Simples Normal</strong>
+        <span class="opcao-resumo">Recolhimento de IBS e CBS por dentro do PGDAS</span>
+      </a>
+      <a class="opcao-regime" href="{{ url_for('relatorios_reforma', regime='hibrido') }}">
+        <strong>Simples Híbrido</strong>
+        <span class="opcao-resumo">Recolhimento de IBS e CBS por fora do PGDAS</span>
+      </a>
+    </div>
+    <div class="acoes" style="margin-top:16px">
+      <button type="button" class="btn btn-secundario" onclick="document.getElementById('modal-reforma').classList.remove('aberto')">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.modal-reforma{display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1000;align-items:center;justify-content:center;padding:16px}
+.modal-reforma.aberto{display:flex}
+.modal-reforma-caixa{background:#fff;border-radius:12px;max-width:560px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.3)}
+.modal-reforma-caixa h2{margin:0 0 6px}
+.opcoes-regime{display:grid;gap:12px;margin-top:16px}
+.opcao-regime{display:block;padding:14px 16px;border:2px solid #cbd5e1;border-radius:10px;text-decoration:none;color:#0f172a;background:#f8fafc}
+.opcao-regime:hover{border-color:#1f4e79;background:#eef4fb}
+.opcao-regime strong{display:block;font-size:15px}
+.opcao-regime span{display:block;font-size:13px;color:#64748b;margin-top:2px}
+.opcao-regime .opcao-resumo{font-size:13.5px;color:#1f4e79;font-weight:600;margin-top:4px}
+</style>
+
+<div class="card" style="margin-top:18px">
   <h2>Prévia do conteúdo</h2>
   <div class="tabela-scroll">
     <table>

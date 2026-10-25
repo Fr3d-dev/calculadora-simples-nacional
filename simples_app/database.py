@@ -124,6 +124,26 @@ CREATE TABLE IF NOT EXISTS cnae_anexos (
 
 CREATE INDEX IF NOT EXISTS idx_cnae_anexos_cnae ON cnae_anexos(cnae);
 
+-- Relação NBS x cClassTrib x Indicador de Operação (INDOP), carregada da
+-- planilha RELAÇÃO NBS Cclasstrib e Ind Operac.xlsx e exibida na aba Tabelas.
+CREATE TABLE IF NOT EXISTS relacao_nbs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ordem INTEGER NOT NULL DEFAULT 0,
+    item_lc116 TEXT,
+    descricao_item TEXT,
+    nbs TEXT,
+    descricao_nbs TEXT,
+    ps_onerosa TEXT,
+    adq_exterior TEXT,
+    indop TEXT,
+    local_incidencia TEXT,
+    cclasstrib TEXT,
+    nome_cclasstrib TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_relacao_nbs_nbs ON relacao_nbs(nbs);
+CREATE INDEX IF NOT EXISTS idx_relacao_nbs_cclasstrib ON relacao_nbs(cclasstrib);
+
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER,
@@ -184,6 +204,7 @@ def init_db():
     _seed_tabelas_base(db)
     _seed_cnae_itens_lc116(db)
     _seed_cnae_anexos(db)
+    _seed_relacao_nbs(db)
 
 
 def _seed_tabelas_base(db: sqlite3.Connection):
@@ -696,6 +717,145 @@ def _seed_cnae_anexos(db: sqlite3.Connection):
         carregados += 1
     db.commit()
     print(f"  >>> CNAE x ANEXO: {carregados} subclasse(s) carregada(s) da planilha.")
+
+
+def _seed_relacao_nbs(db: sqlite3.Connection):
+    """Carrega a relação NBS x cClassTrib x INDOP a partir da planilha.
+
+    Só roda quando a tabela está vazia. Se a planilha não estiver disponível
+    (ex.: no servidor), o app sobe normalmente e a aba Tabelas avisa.
+    """
+    try:
+        total = db.execute("SELECT COUNT(*) FROM relacao_nbs").fetchone()[0]
+        if total:
+            return
+        import relacao_nbs as fonte
+        registros = fonte.ler_planilha()
+    except Exception as exc:  # noqa: BLE001 - não impede a subida do app
+        print(f"  >>> Seed RELAÇÃO NBS ignorado: {exc}")
+        return
+
+    db.executemany(
+        """INSERT INTO relacao_nbs
+           (ordem, item_lc116, descricao_item, nbs, descricao_nbs,
+            ps_onerosa, adq_exterior, indop, local_incidencia,
+            cclasstrib, nome_cclasstrib)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                r.get("ordem", 0), r.get("item_lc116", ""),
+                r.get("descricao_item", ""), r.get("nbs", ""),
+                r.get("descricao_nbs", ""), r.get("ps_onerosa", ""),
+                r.get("adq_exterior", ""), r.get("indop", ""),
+                r.get("local_incidencia", ""), r.get("cclasstrib", ""),
+                r.get("nome_cclasstrib", ""),
+            )
+            for r in registros
+        ],
+    )
+    db.commit()
+    print(f"  >>> RELAÇÃO NBS: {len(registros)} linha(s) carregada(s).")
+
+
+def listar_relacao_nbs(busca=None, limite=2000, conn=None):
+    """Relação NBS x cClassTrib x INDOP, filtrando por NBS, item, cClassTrib
+    ou texto da descrição."""
+    db = conn or get_db()
+    if busca and busca.strip():
+        termo = busca.strip()
+        padrao = f"%{termo}%"
+        return db.execute(
+            """SELECT * FROM relacao_nbs
+               WHERE nbs LIKE ? OR cclasstrib LIKE ? OR item_lc116 LIKE ?
+                  OR descricao_item LIKE ? OR descricao_nbs LIKE ?
+                  OR nome_cclasstrib LIKE ?
+               ORDER BY ordem, id LIMIT ?""",
+            (padrao, padrao, padrao, padrao, padrao, padrao, limite),
+        ).fetchall()
+    return db.execute(
+        "SELECT * FROM relacao_nbs ORDER BY ordem, id LIMIT ?", (limite,)
+    ).fetchall()
+
+
+def contar_relacao_nbs(conn=None) -> int:
+    """Quantidade total de linhas da relação NBS no banco."""
+    db = conn or get_db()
+    return db.execute("SELECT COUNT(*) FROM relacao_nbs").fetchone()[0]
+
+
+def relacao_nbs_por_itens(itens, conn=None) -> list:
+    """Linhas da relação NBS dos itens LC 116 informados (ex.: ["01.01"]).
+
+    Retorna na ordem da planilha (ordem, id) para que as classificações de um
+    mesmo item apareçam agrupadas e na sequência original.
+    """
+    db = conn or get_db()
+    codigos = [i for i in (itens or []) if i]
+    if not codigos:
+        return []
+    marcadores = ",".join("?" for _ in codigos)
+    return db.execute(
+        f"""SELECT * FROM relacao_nbs
+            WHERE item_lc116 IN ({marcadores})
+            ORDER BY ordem, id""",
+        tuple(codigos),
+    ).fetchall()
+
+
+def _campos_relacao_nbs(dados: dict) -> tuple:
+    """Normaliza os 10 campos editáveis, na ordem das colunas do banco."""
+    return tuple(" ".join(str(dados.get(col) or "").split())
+                 for col in (
+                     "item_lc116", "descricao_item", "nbs", "descricao_nbs",
+                     "ps_onerosa", "adq_exterior", "indop",
+                     "local_incidencia", "cclasstrib", "nome_cclasstrib",
+                 ))
+
+
+def atualizar_relacao_nbs(registro_id, dados: dict, conn=None):
+    """Atualiza uma linha da relação NBS x cClassTrib x INDOP.
+
+    Vale imediatamente para todo o sistema: o banco é a fonte da verdade.
+    """
+    db = conn or get_db()
+    campos = _campos_relacao_nbs(dados)
+    db.execute(
+        """UPDATE relacao_nbs SET
+               item_lc116=?, descricao_item=?, nbs=?, descricao_nbs=?,
+               ps_onerosa=?, adq_exterior=?, indop=?, local_incidencia=?,
+               cclasstrib=?, nome_cclasstrib=?
+           WHERE id=?""",
+        (*campos, registro_id),
+    )
+    db.commit()
+
+
+def adicionar_relacao_nbs(dados: dict, conn=None) -> int:
+    """Inclui uma nova linha na relação. Exige NBS ou cClassTrib informado."""
+    db = conn or get_db()
+    campos = _campos_relacao_nbs(dados)
+    if not campos[2] and not campos[8]:
+        raise ValueError(
+            "Informe a NBS e/ou o cClassTrib (ex.: 1.0101.10 / 000001)."
+        )
+    ordem = db.execute("SELECT COALESCE(MAX(ordem), 0) + 1 FROM relacao_nbs").fetchone()[0]
+    cur = db.execute(
+        """INSERT INTO relacao_nbs
+           (ordem, item_lc116, descricao_item, nbs, descricao_nbs,
+            ps_onerosa, adq_exterior, indop, local_incidencia,
+            cclasstrib, nome_cclasstrib)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ordem, *campos),
+    )
+    db.commit()
+    return cur.lastrowid
+
+
+def excluir_relacao_nbs(registro_id, conn=None):
+    """Remove uma linha da relação NBS."""
+    db = conn or get_db()
+    db.execute("DELETE FROM relacao_nbs WHERE id=?", (registro_id,))
+    db.commit()
 
 
 def listar_cnae_anexos(busca=None, limite=2000, conn=None):

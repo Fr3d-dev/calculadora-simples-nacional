@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block titulo %}Relatório Reforma · Calculadora Simples Nacional{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Relatório Reforma — {{ nome_regime }}</h1>
+    <p>
+      NBS, CClassTrib e IndOper preenchidos pela Relação NBS conforme o item de
+      serviço de {{ ident.nome_fantasia or ident.razao_social }}
+      {%- if ident.cnpj %} · CNPJ {{ ident.cnpj }}{% endif %}.
+    </p>
+  </div>
+  <div class="acoes">
+    <a class="btn" href="{{ url_for('relatorios') }}">← Voltar aos relatórios</a>
+    <a class="btn" href="{{ url_for('relatorios_reforma_excel', regime=regime) }}">⬇ Baixar Excel (.xlsx)</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Regime escolhido: {{ nome_regime }}</h2>
+  <p class="texto-suave">
+    {% if regime == 'normal' %}
+      <strong>Recolhimento de IBS e CBS por dentro do PGDAS.</strong><br>
+      Foram trazidas apenas as classificações com <strong>cClassTrib 000001</strong>.
+      Itens que só têm outras classificações aparecem como
+      “sem classificação” para preenchimento manual.
+    {% else %}
+      <strong>Recolhimento de IBS e CBS por fora do PGDAS.</strong><br>
+      Foram trazidas <strong>todas</strong> as relações correspondentes ao código
+      de serviço.
+    {% endif %}
+    {% if sem_classificacao %}
+      <br>Linhas destacadas em amarelo: {{ sem_classificacao }} — item sem
+      classificação para o regime escolhido.
+    {% endif %}
+    <br><br>
+    Trocar regime:
+    <a href="{{ url_for('relatorios_reforma', regime='normal') }}">Simples Normal</a>
+    ·
+    <a href="{{ url_for('relatorios_reforma', regime='hibrido') }}">Simples Híbrido</a>
+  </p>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <h2>Prévia ({{ linhas | length }} linhas)</h2>
+  <div class="tabela-scroll">
+    <table>
+      <thead>
+        <tr>
+          {% for coluna in cabecalho %}
+          <th {% if coluna == 'Descrição' or coluna == 'Descrição NBS' or coluna == 'Descrição CClassTrib' %}style="min-width:220px"{% endif %}>{{ coluna }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in linhas %}
+        <tr {% if linha['Local incidência IBS'] == 'Sem classificação na Relação NBS' %}style="background:#fff7e0"{% endif %}>          {% for coluna in cabecalho %}
+          <td>{{ linha[coluna] if linha[coluna] else '—' }}</td>
+          {% endfor %}
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="{{ cabecalho | length }}" style="text-align:center;color:#64748b">
+            Nenhum item de serviço encontrado para esta empresa.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
