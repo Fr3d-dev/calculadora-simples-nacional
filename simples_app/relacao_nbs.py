@@ -1,12 +1,18 @@
-"""Leitor da planilha RELAÇÃO NBS x cClassTrib x Indicador de Operação.
+"""Leitor da relação NBS x cClassTrib x Indicador de Operação.
 
-A planilha fica na raiz do projeto (um nível acima do pacote do app). Ela é
-usada apenas como SEMENTE: na primeira execução, se a tabela `relacao_nbs`
-estiver vazia, as linhas são copiadas para o banco. Depois disso a fonte da
-verdade passa a ser o banco, editável em Administração > Tabelas > Relação NBS,
-sem precisar mexer em código nem republicar o app.
+Fonte dos dados, em ordem de preferência:
 
-Colunas da aba "tabela geral" (A..L):
+1. ``relacao_nbs.json`` na raiz do projeto — arquivo versionado no Git, usado
+   no servidor (mesma estratégia do ``cnae_lc116.json``). É a fonte padrão.
+2. A planilha ``RELAÇÃO NBS Cclasstrib e Ind Operac.xlsx``, quando presente
+   (útil no desenvolvimento, depois de mexer na planilha original).
+
+Os dados são usados apenas como SEMENTE: na primeira execução, se a tabela
+`relacao_nbs` estiver vazia, as linhas são copiadas para o banco. Depois disso a
+fonte da verdade passa a ser o banco, editável em Administração > Tabelas >
+Relação NBS, sem precisar mexer em código nem republicar o app.
+
+Colunas da aba "tabela geral" (A..J):
     A Item LC 116 | B Descrição Item | C NBS | D DESCRIÇÃO NBS
     E PS ONEROSA? (S/N) | F ADQ EXTERIOR? (S/N) | G INDOP
     H Local incidência IBS | I cClassTrib | J nome cClassTrib
@@ -15,9 +21,11 @@ Colunas da aba "tabela geral" (A..L):
 
 from __future__ import annotations
 
+import json
 import os
 
 NOME_ARQUIVO = "RELAÇÃO NBS Cclasstrib e Ind Operac.xlsx"
+NOME_JSON = "relacao_nbs.json"
 ABA = "tabela geral"
 
 # Ordem/nomes exatamente como na planilha.
@@ -48,17 +56,84 @@ ROTULOS = {
 }
 
 
+def _candidatos(app_dir: str, nome: str) -> list:
+    """Caminhos possíveis: ao lado do app e na raiz do projeto."""
+    return [
+        os.path.join(app_dir, nome),
+        os.path.join(os.path.dirname(app_dir.rstrip("/\\")), nome),
+    ]
+
+
 def caminho_planilha(app_dir: str) -> str:
     """Caminho da planilha: primeiro ao lado do app, depois na raiz do projeto."""
-    candidatos = [
-        os.path.join(app_dir, NOME_ARQUIVO),
-        os.path.join(os.path.dirname(app_dir.rstrip("/\\")), NOME_ARQUIVO),
-    ]
+    candidatos = _candidatos(app_dir, NOME_ARQUIVO)
     for caminho in candidatos:
         if os.path.exists(caminho):
             return caminho
     # Se não achar, devolve o candidato mais provável (para a mensagem de erro).
     return candidatos[1]
+
+
+def caminho_json(app_dir: str) -> str:
+    """Caminho do JSON: primeiro ao lado do app, depois na raiz do projeto."""
+    candidatos = _candidatos(app_dir, NOME_JSON)
+    for caminho in candidatos:
+        if os.path.exists(caminho):
+            return caminho
+    return candidatos[1]
+
+
+def ler_json(caminho: str | None = None, app_dir: str | None = None) -> list[dict]:
+    """Lê o ``relacao_nbs.json`` e devolve a lista de registros.
+
+    Cada registro traz as mesmas 10 colunas de COLUNAS (strings) mais ``ordem``.
+    Este é o caminho usado no servidor, onde a planilha não é versionada.
+    """
+    if caminho is None:
+        base = app_dir or os.path.dirname(os.path.abspath(__file__))
+        caminho = caminho_json(base)
+    if not os.path.exists(caminho):
+        raise FileNotFoundError(f"JSON não encontrado: {caminho}")
+
+    with open(caminho, encoding="utf-8") as arquivo:
+        dados = json.load(arquivo)
+
+    registros = []
+    for posicao, item in enumerate(dados, start=1):
+        registro = {col: _texto(item.get(col)) for col in COLUNAS}
+        if not registro["nbs"] and not registro["cclasstrib"]:
+            continue
+        try:
+            registro["ordem"] = int(item.get("ordem", posicao))
+        except (TypeError, ValueError):
+            registro["ordem"] = posicao
+        registros.append(registro)
+    return registros
+
+
+def carregar(app_dir: str | None = None) -> list[dict]:
+    """Carrega a relação, preferindo o JSON versionado e caindo na planilha.
+
+    Ordem: ``relacao_nbs.json`` -> planilha .xlsx. Levanta a última exceção se
+    nenhuma das duas fontes existir (o chamador decide se ignora).
+    """
+    base = app_dir or os.path.dirname(os.path.abspath(__file__))
+    erros = []
+    if os.path.exists(caminho_json(base)):
+        try:
+            return ler_json(app_dir=base)
+        except Exception as exc:  # noqa: BLE001 - tenta a próxima fonte
+            erros.append(f"JSON: {exc}")
+    if os.path.exists(caminho_planilha(base)):
+        try:
+            return ler_planilha(app_dir=base)
+        except Exception as exc:  # noqa: BLE001 - tenta a próxima fonte
+            erros.append(f"planilha: {exc}")
+    if erros:
+        raise RuntimeError("; ".join(erros))
+    raise FileNotFoundError(
+        f"Nenhuma fonte encontrada ({NOME_JSON} ou {NOME_ARQUIVO}) em {base}"
+    )
 
 
 def _texto(valor) -> str:

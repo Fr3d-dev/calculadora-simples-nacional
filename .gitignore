@@ -28,7 +28,9 @@ extratos/
 # Exceto as planilhas públicas de referência (necessárias ao enquadramento)
 !CNAE_Subclasses_2_3_Estrutura_Detalhada_DESCRICOES.xlsx
 !Cnae_X_Item_Lista_Servicos.xlsx
-
+# A planilha "RELAÇÃO NBS Cclasstrib e Ind Operac.xlsx" fica de fora (é
+# documento fiscal de referência). O que sobe é o `relacao_nbs.json`, gerado a
+# partir dela e usado como semente da tabela relacao_nbs.
 # Backups manuais
 _backup/
 

@@ -720,17 +720,19 @@ def _seed_cnae_anexos(db: sqlite3.Connection):
 
 
 def _seed_relacao_nbs(db: sqlite3.Connection):
-    """Carrega a relação NBS x cClassTrib x INDOP a partir da planilha.
+    """Carrega a relação NBS x cClassTrib x INDOP a partir do JSON/planilha.
 
-    Só roda quando a tabela está vazia. Se a planilha não estiver disponível
-    (ex.: no servidor), o app sobe normalmente e a aba Tabelas avisa.
+    Só roda quando a tabela está vazia. Prefere o `relacao_nbs.json` versionado
+    no Git (disponível no servidor) e cai na planilha .xlsx se ela existir.
+    Se nenhuma fonte estiver disponível, o app sobe normalmente e a aba Tabelas
+    avisa.
     """
     try:
         total = db.execute("SELECT COUNT(*) FROM relacao_nbs").fetchone()[0]
         if total:
             return
         import relacao_nbs as fonte
-        registros = fonte.ler_planilha()
+        registros = fonte.carregar()
     except Exception as exc:  # noqa: BLE001 - não impede a subida do app
         print(f"  >>> Seed RELAÇÃO NBS ignorado: {exc}")
         return
