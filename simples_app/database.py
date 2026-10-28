@@ -795,11 +795,24 @@ def relacao_nbs_por_itens(itens, conn=None) -> list:
     codigos = [i for i in (itens or []) if i]
     if not codigos:
         return []
-    marcadores = ",".join("?" for _ in codigos)
-    # Também traz os subitens de 3 níveis ("99.02.01" quando o item é "99.02"),
-    # para que nenhuma classificação já cadastrada fique de fora.
-    likes = " OR ".join("item_lc116 LIKE ?" for _ in codigos)
-    parametros = tuple(codigos) + tuple(f"{i}.%" for i in codigos)
+
+    # O banco guarda o item com zero à esquerda ("04.12"), mas o relatório
+    # trabalha com o código normalizado ("4.12": int("04") == 4). Consultar
+    # só com a forma normalizada não casava "04.12" e o item voltava vazio.
+    # Por isso buscamos as duas grafias: a recebida e a "com zero", e ainda
+    # os subitens de 3 níveis ("99.02.01" quando o item é "99.02").
+    variantes: list[str] = []
+    for codigo in codigos:
+        variantes.append(codigo)
+        inteiro, _, resto = codigo.partition(".")
+        if inteiro.isdigit():
+            variantes.append(f"{int(inteiro):02d}.{resto}" if resto
+                             else f"{int(inteiro):02d}")
+
+    unicas = list(dict.fromkeys(variantes))
+    marcadores = ",".join("?" for _ in unicas)
+    likes = " OR ".join("item_lc116 LIKE ?" for _ in unicas)
+    parametros = tuple(unicas) + tuple(f"{i}.%" for i in unicas)
     return db.execute(
         f"""SELECT * FROM relacao_nbs
             WHERE item_lc116 IN ({marcadores}) OR {likes}
