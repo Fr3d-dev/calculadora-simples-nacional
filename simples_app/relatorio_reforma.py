@@ -49,6 +49,22 @@ def normalizar_regime(valor) -> str:
     texto = ("" if valor is None else str(valor)).strip().lower()
     return texto if texto in REGIMES else REGIME_NORMAL
 
+def _eh_cclasstrib_normal(valor) -> bool:
+    """True quando o cClassTrib corresponde a 000001, tolerando formatação.
+
+    O banco pode devolver o valor como texto ("000001", " 000001 ") ou como
+    número (1, 0001). Comparar por texto puro fazia a linha sumir do regime
+    Normal mesmo estando cadastrada corretamente.
+    """
+    texto = re.sub(r"\D", "", str("" if valor is None else valor))
+    if not texto:
+        return False
+    try:
+        return int(texto) == int(CCLASSTRIB_SIMPLES_NORMAL)
+    except ValueError:
+        return False
+
+
 def filtrar_por_regime(classificacoes, regime):
     """Filtra as classificações de um item conforme o regime escolhido.
 
@@ -60,7 +76,7 @@ def filtrar_por_regime(classificacoes, regime):
         return list(classificacoes or [])
     return [
         c for c in (classificacoes or [])
-        if (c["cclasstrib"] or "").strip() == CCLASSTRIB_SIMPLES_NORMAL
+        if _eh_cclasstrib_normal(c["cclasstrib"])
     ]
 
 
@@ -68,28 +84,38 @@ def normalizar_item(valor) -> str:
     """Normaliza o código do item LC 116 para comparar.
 
     Aceita "01.01", "1.01", "01.1", " 01.01 (parte final)" e devolve "01.01".
+    Preserva o item taxativo de 3 níveis: "99.02.01" continua "99.02.01".
     Devolve "" quando não há código reconhecível.
     """
     texto = ("" if valor is None else str(valor)).strip()
     if not texto:
         return ""
-    achado = re.search(r"(\d+)\s*[.,]?\s*(\d*)", texto)
+    # Item da LC 116 (2 níveis) + subitem (3 níveis), ex.: "99.02.01".
+    achado = re.search(r"(\d+)\s*[.,]?\s*(\d*)\s*[.,]?\s*(\d*)", texto)
     if not achado:
         return ""
-    inteiro, decimal = achado.group(1), achado.group(2)
+    inteiro, decimal, sub = achado.group(1), achado.group(2), achado.group(3)
     inteiro = str(int(inteiro)) if inteiro else ""
     if not decimal:
         return inteiro
-    return f"{inteiro}.{decimal}"
+    if not sub:
+        return f"{inteiro}.{decimal}"
+    return f"{inteiro}.{decimal}.{sub}"
 
 
 def _chave_canonica(valor) -> str:
-    """Chave de comparação sem depender da formatação ("1.01" == "01.01")."""
+    """Chave de comparação sem depender da formatação ("1.01" == "01.01").
+
+    Compara parte a parte, sem truncar: "99.02.01" não vira "99.02".
+    """
     normalizado = normalizar_item(valor)
-    if "." not in normalizado:
+    if not normalizado:
+        return ""
+    partes = normalizado.split(".")
+    try:
+        return ".".join(str(int(p)) for p in partes)
+    except ValueError:
         return normalizado
-    inteiro, decimal = normalizado.split(".", 1)
-    return f"{inteiro}.{decimal}"
 
 
 def indexar_por_item(registros) -> dict:
@@ -149,11 +175,16 @@ def montar_linhas(linhas_cnae, registros_nbs, regime=REGIME_HIBRIDO) -> list[dic
             continue
 
         for item in itens:
+            # O código do item pode vir em "codigo" ou em "item": os itens do
+            # CNAE (explicacoes.explicar) usam "codigo", enquanto o cadastro
+            # da relação NBS usa "item". Busca e exibição precisam usar a
+            # MESMA chave, senão a classificação não é encontrada e as colunas
+            # da reforma saem vazias.
             codigo = (item.get("codigo") or "").strip() or \
                 normalizar_item(item.get("item", ""))
             descricao_item = (item.get("descricao") or "").strip() or descricao_cnae
             classificacoes = filtrar_por_regime(
-                indice.get(_chave_canonica(item.get("item", "")), []), regime)
+                indice.get(_chave_canonica(codigo), []), regime)
 
             if not classificacoes:
                 resultado.append({

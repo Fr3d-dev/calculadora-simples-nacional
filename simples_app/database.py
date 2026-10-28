@@ -796,11 +796,15 @@ def relacao_nbs_por_itens(itens, conn=None) -> list:
     if not codigos:
         return []
     marcadores = ",".join("?" for _ in codigos)
+    # Também traz os subitens de 3 níveis ("99.02.01" quando o item é "99.02"),
+    # para que nenhuma classificação já cadastrada fique de fora.
+    likes = " OR ".join("item_lc116 LIKE ?" for _ in codigos)
+    parametros = tuple(codigos) + tuple(f"{i}.%" for i in codigos)
     return db.execute(
         f"""SELECT * FROM relacao_nbs
-            WHERE item_lc116 IN ({marcadores})
+            WHERE item_lc116 IN ({marcadores}) OR {likes}
             ORDER BY ordem, id""",
-        tuple(codigos),
+        parametros,
     ).fetchall()
 
 

@@ -1397,7 +1397,11 @@ def registrar_rotas(app: Flask):
         for linha in contexto["linhas_cnae"]:
             explicacao = linha.get("explicacao") or {}
             for item in explicacao.get("itens_lc116") or []:
-                codigo = reforma.normalizar_item(item.get("item", ""))
+                # Mesma regra de relatorio_reforma.montar_linhas: o item do
+                # CNAE pode trazer o código em "codigo" (e não em "item").
+                codigo = (item.get("codigo") or "").strip() or \
+                    reforma.normalizar_item(item.get("item", ""))
+                codigo = reforma.normalizar_item(codigo)
                 if codigo:
                     codigos.add(codigo)
 
