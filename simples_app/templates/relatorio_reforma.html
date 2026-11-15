@@ -49,7 +49,7 @@
       <thead>
         <tr>
           {% for coluna in cabecalho %}
-          <th {% if coluna == 'Descrição' or coluna == 'Descrição NBS' or coluna == 'Descrição CClassTrib' %}style="min-width:220px"{% endif %}>{{ coluna }}</th>
+          <th {% if coluna in ['Descrição', 'Descrição do item', 'Descrição NBS', 'Descrição CClassTrib'] %}style="min-width:220px"{% endif %}>{{ coluna }}</th>
           {% endfor %}
         </tr>
       </thead>

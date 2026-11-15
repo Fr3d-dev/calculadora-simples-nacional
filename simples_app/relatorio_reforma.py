@@ -16,10 +16,13 @@ from __future__ import annotations
 import re
 
 # Colunas do relatório, na ordem em que saem no Excel.
+# Logo após o código do CNAE vem a sua "Descrição"; a descrição do item da
+# LC 116 é a "Descrição do item", mantendo o texto exato à direita do código.
 CABECALHO = [
     "CNAE",
-    "Item (LC 116/2003)",
     "Descrição",
+    "Item (LC 116/2003)",
+    "Descrição do item",
     "NBS",
     "Descrição NBS",
     "CClassTrib",
@@ -146,7 +149,9 @@ def montar_linhas(linhas_cnae, registros_nbs, regime=REGIME_HIBRIDO) -> list[dic
     Devolve uma lista de dicts com as chaves de CABECALHO. Para cada item da
     LC 116 com N classificações na relação NBS, devolve N linhas seguidas:
     a primeira traz o código CNAE/item, as seguintes repetem o código e ficam
-    como continuação (coluna Descrição vazia, para não poluir a leitura).
+    como continuação (coluna "Descrição do item" vazia, para não poluir a
+    leitura). A coluna "Descrição" (do CNAE) se repete em todas as linhas do
+    mesmo CNAE, pois vem logo após o código e é dela que o leitor parte.
     """
     indice = indexar_por_item(registros_nbs)
     resultado: list[dict] = []
@@ -161,8 +166,9 @@ def montar_linhas(linhas_cnae, registros_nbs, regime=REGIME_HIBRIDO) -> list[dic
             # Sem item da LC 116: uma linha só, sem classificação possível.
             resultado.append({
                 "CNAE": cnae,
-                "Item (LC 116/2003)": descricao_cnae or "—",
                 "Descrição": descricao_cnae,
+                "Item (LC 116/2003)": descricao_cnae or "—",
+                "Descrição do item": descricao_cnae,
                 "NBS": "",
                 "Descrição NBS": "",
                 "CClassTrib": "",
@@ -189,8 +195,9 @@ def montar_linhas(linhas_cnae, registros_nbs, regime=REGIME_HIBRIDO) -> list[dic
             if not classificacoes:
                 resultado.append({
                     "CNAE": cnae,
+                    "Descrição": descricao_cnae,
                     "Item (LC 116/2003)": codigo or item.get("item", ""),
-                    "Descrição": descricao_item,
+                    "Descrição do item": descricao_item,
                     "NBS": "",
                     "Descrição NBS": "",
                     "CClassTrib": "",
@@ -205,8 +212,9 @@ def montar_linhas(linhas_cnae, registros_nbs, regime=REGIME_HIBRIDO) -> list[dic
             for posicao, classificacao in enumerate(classificacoes):
                 resultado.append({
                     "CNAE": cnae,
+                    "Descrição": descricao_cnae,
                     "Item (LC 116/2003)": codigo or item.get("item", ""),
-                    "Descrição": descricao_item if posicao == 0 else "",
+                    "Descrição do item": descricao_item if posicao == 0 else "",
                     "NBS": classificacao["nbs"] or "",
                     "Descrição NBS": classificacao["descricao_nbs"] or "",
                     "CClassTrib": classificacao["cclasstrib"] or "",
@@ -259,7 +267,8 @@ def preencher_planilha(ws, linhas, ident=None, regime=None) -> None:
                 ws.cell(row=ws.max_row, column=coluna).fill = cor_sem_relacao
 
     larguras = {
-        "CNAE": 13, "Item (LC 116/2003)": 17, "Descrição": 46,
+        "CNAE": 13, "Descrição": 46, "Item (LC 116/2003)": 17,
+        "Descrição do item": 46,
         "NBS": 16, "Descrição NBS": 50, "CClassTrib": 13,
         "Descrição CClassTrib": 46, "IndOper": 11, "PS Onerosa": 12,
         "Adq. Exterior": 13, "Local incidência IBS": 38,

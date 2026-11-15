@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block titulo %}Carteira de clientes{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Carteira de clientes</h1>
+    <p>Escritórios contábeis licenciados. Área exclusiva do master.</p>
+  </div>
+  <a class="btn" href="{{ url_for('carteira_novo') }}">+ Novo escritório</a>
+</div>
+
+{% if suporte %}
+<div class="card" style="border-left:4px solid #f59e0b;margin-bottom:16px">
+  <strong>Modo suporte ativo: {{ suporte.razao_social }}</strong>
+  <p class="texto-suave" style="margin:6px 0 0">
+    Você está vendo os dados deste escritório. Este acesso está registrado no log.
+  </p>
+  <form method="post" action="{{ url_for('carteira_suporte_encerrar') }}" style="margin-top:10px">
+    <button class="btn secundario pequeno" type="submit">Encerrar modo suporte</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="get" action="{{ url_for('carteira') }}" style="margin-bottom:14px;display:flex;gap:8px">
+    <input type="text" name="q" value="{{ busca }}" placeholder="Buscar por razão social, CNPJ ou e-mail…">
+    <button class="btn secundario pequeno" type="submit">Buscar</button>
+    {% if busca %}
+      <a class="btn secundario pequeno" href="{{ url_for('carteira') }}">Limpar</a>
+    {% endif %}
+  </form>
+
+  {% if escritorios %}
+  <div class="tabela-responsiva">
+    <table>
+      <thead>
+        <tr>
+          <th>Escritório</th>
+          <th>CNPJ</th>
+          <th>Administrador</th>
+          <th>Acesso do cliente</th>
+          <th>Contato</th>
+          <th>Status</th>
+          <th class="num" style="min-width:220px">Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in escritorios %}
+        <tr>
+          <td>
+            <strong>{{ e.razao_social }}</strong>
+            {% if e.nome_fantasia %}
+              <div class="texto-suave" style="font-size:0.85em">{{ e.nome_fantasia }}</div>
+            {% endif %}
+          </td>
+          <td><code>{{ e.cnpj or '—' }}</code></td>
+          <td>
+            {{ e.usuario_nome or '—' }}
+            <div class="texto-suave" style="font-size:0.8em"><code>{{ e.usuario_email or '' }}</code></div>
+          </td>
+          <td>
+            <div class="texto-suave" style="font-size:0.8em">
+              <code>{{ e.usuario_email or '—' }}</code>
+            </div>
+            <div style="font-size:0.85em">
+              {% if e.senha_clara %}
+                <code>{{ e.senha_clara }}</code>
+              {% else %}
+                <span class="texto-suave">—</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="texto-suave" style="font-size:0.85em">
+            {% if e.email %}{{ e.email }}<br>{% endif %}
+            {% if e.telefone %}{{ e.telefone }}<br>{% endif %}
+            {% if e.municipio %}{{ e.municipio }}{% if e.uf %}/{{ e.uf }}{% endif %}{% endif %}
+            {% if not (e.email or e.telefone or e.municipio) %}—{% endif %}
+          </td>
+          <td>
+            {% if e.ativo %}
+              <span class="badge ativo">Ativo</span>
+            {% else %}
+              <span class="badge inativo">Inativo</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            <div class="acoes" style="justify-content:flex-end;gap:4px;flex-wrap:wrap">
+              <a class="btn secundario pequeno" href="{{ url_for('carteira_editar', escritorio_id=e.id) }}">
+                ✏️ Editar
+              </a>
+              <form method="post" action="{{ url_for('carteira_suporte', escritorio_id=e.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Abrir modo suporte para {{ e.razao_social|e }}?\n\nEste acesso ficará registrado no log de auditoria.');">
+                <button class="btn secundario pequeno" type="submit">🔧 Suporte</button>
+              </form>
+              <form method="post" action="{{ url_for('carteira_excluir', escritorio_id=e.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Remover {{ e.razao_social|e }} da carteira?\n\nO usuário do cliente continua ativo.');">
+                <button class="btn secundario pequeno" type="submit">🗑️</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="texto-suave">
+      {% if busca %}
+        Nenhum escritório encontrado para "{{ busca }}".
+      {% else %}
+        Nenhum escritório na carteira ainda. Use <strong>+ Novo escritório</strong> para começar.
+      {% endif %}
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

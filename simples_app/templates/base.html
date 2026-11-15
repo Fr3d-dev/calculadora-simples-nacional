@@ -33,15 +33,18 @@
       {% endfor %}
       {% if is_admin %}
         <a href="{{ url_for('admin') }}" class="{{ 'ativo' if request.endpoint == 'admin' }}">Usuários</a>
-        <a href="{{ url_for('admin_tabelas') }}" class="{{ 'ativo' if request.endpoint == 'admin_tabelas' }}">Tabelas</a>
         <a href="{{ url_for('admin_logs') }}" class="{{ 'ativo' if request.endpoint == 'admin_logs' }}">Logs</a>
+        <a href="{{ url_for('admin_backup') }}" class="{{ 'ativo' if request.endpoint == 'admin_backup' }}">Backup</a>
       {% elif tem_permissao('gerenciar_usuarios') %}
         <a href="{{ url_for('admin') }}" class="{{ 'ativo' if request.endpoint == 'admin' }}">Usuários</a>
       {% endif %}
       {% if tem_permissao('ver_logs') and not is_admin %}
         <a href="{{ url_for('admin_logs') }}" class="{{ 'ativo' if request.endpoint == 'admin_logs' }}">Logs</a>
       {% endif %}
-      {% if tem_permissao('editar_tabelas') and not is_admin %}
+      {# Carteira de clientes e Tabelas do sistema: master e gerente
+         (acesso desenvolvedor). #}
+      {% if tem_acesso_dev %}
+        <a href="{{ url_for('carteira') }}" class="{{ 'ativo' if request.endpoint in ['carteira', 'carteira_novo', 'carteira_editar'] }}">Carteira</a>
         <a href="{{ url_for('admin_tabelas') }}" class="{{ 'ativo' if request.endpoint == 'admin_tabelas' }}">Tabelas</a>
       {% endif %}
     </nav>
@@ -61,6 +64,7 @@
         {% endif %}
         <span>{{ g.usuario.nome }} · {{ g.usuario.email }}</span>
         {% if g.usuario.is_admin %}<span class="badge admin">ADMIN</span>{% endif %}
+        {% if eh_gerente %}<span class="badge admin" style="background:#f59e0b">GERENTE</span>{% endif %}
         · <a href="{{ url_for('logout') }}">Sair</a>
       </div>
     {% endif %}

@@ -35,11 +35,14 @@ from __future__ import annotations
 
 import os
 import secrets
+import sqlite3
+import tempfile
+from datetime import datetime, timedelta
 from functools import wraps
 from typing import Optional
 
 from flask import (
-    Flask, flash, g, jsonify, redirect, render_template,
+    Flask, current_app, flash, g, jsonify, redirect, render_template,
     request, send_file, session, url_for,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -148,6 +151,9 @@ def create_app() -> Flask:
         return {
             "usuario_logado": usuario,
             "is_admin": admin,
+            "eh_master": bool(usuario and db.eh_master(usuario)),
+            "eh_gerente": bool(usuario and db.eh_gerente(usuario)),
+            "tem_acesso_dev": bool(usuario and db.tem_acesso_dev(usuario)),
             "anexos_menu": anexos_menu,
             "permissoes": user_perms,
             "tem_permissao": lambda p: p in user_perms,
@@ -186,6 +192,26 @@ def admin_required(f):
     def wrapper(*args, **kwargs):
         if not g.usuario["is_admin"]:
             flash("Acesso restrito ao administrador.", "erro")
+            return redirect(url_for("dashboard"))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def master_required(f):
+    """Exige perfil com acesso desenvolvedor (master OU gerente).
+
+    Usado nas telas que não pertencem ao escritório: Carteira de clientes e
+    edição das tabelas do sistema. A checagem é feita aqui, no servidor, e
+    não só escondendo o link no template.
+
+    Atenção: isto NÃO autoriza criar/editar perfis. A gestão de quem é
+    gerente ou master continua exclusiva do master (ver rotas de usuários).
+    """
+    @wraps(f)
+    @login_required
+    def wrapper(*args, **kwargs):
+        if not db.tem_acesso_dev(g.usuario):
+            flash("Acesso restrito ao master/gerente do sistema.", "erro")
             return redirect(url_for("dashboard"))
         return f(*args, **kwargs)
     return wrapper
@@ -337,14 +363,116 @@ def _registrar_cnae_conhecimento(dados: dict) -> None:
 
 
 def empresa_ativa():
-    """Empresa selecionada pelo usuário logado (quando houver)."""
+    """Empresa selecionada pelo usuário logado (quando houver).
+
+    Só devolve a empresa se ela estiver dentro do escopo do usuário, para que
+    um vínculo antigo não exponha a empresa de outra pessoa.
+    """
     user = usuario_atual()
     if not user:
         return None
     empresa_id = user["empresa_id"] if "empresa_id" in user.keys() else None
     if not empresa_id:
         return None
-    return db.buscar_empresa_por_id(empresa_id)
+    empresa = db.buscar_empresa_por_id(empresa_id)
+    if not pode_ver_empresa(empresa, user):
+        return None
+    return empresa
+
+
+# ---------------------------------------------------------------------------
+# Isolamento entre escritórios
+# ---------------------------------------------------------------------------
+
+def _ids_visiveis(usuario=None):
+    """IDs dos donos cujas empresas o usuário pode ver.
+
+    Cada usuário enxerga **apenas as empresas que ele mesmo cadastrou**.
+    Duas exceções:
+      * modo suporte: o master passa a ver as empresas do escritório
+        atendido, e somente as dele;
+      * perfil gerente (acesso desenvolvedor): vê as empresas de todos os
+        escritórios.
+
+    Devolve None quando o filtro não se aplica, que significa "todas as
+    empresas".
+    """
+    usuario = usuario or g.get("usuario")
+    if not usuario:
+        return None
+
+    # Gerente (acesso desenvolvedor) enxerga a carteira inteira.
+    if db.eh_gerente(usuario):
+        return None
+
+    # Modo suporte: acesso temporário e auditado a um escritório específico.
+    if db.eh_master(usuario):
+        suporte = session.get("suporte")
+        if suporte:
+            try:
+                if datetime.now() < datetime.fromisoformat(suporte["expira"]):
+                    return db.usuarios_do_escritorio(suporte.get("escritorio_id")) or []
+            except (KeyError, TypeError, ValueError):
+                session.pop("suporte", None)
+
+    return [usuario["id"]]
+
+
+def empresas_visiveis(usuario=None):
+    """Empresas que o usuário logado pode ver (as dele, salvo modo suporte)."""
+    ids = _ids_visiveis(usuario)
+    if ids is None:
+        return db.listar_empresas()
+    return db.listar_empresas(usuario_ids=ids)
+
+
+def pode_ver_empresa(empresa, usuario=None):
+    """True se o usuário logado pode ver/alterar esta empresa."""
+    if not empresa:
+        return False
+    ids = _ids_visiveis(usuario)
+    if ids is None:
+        return True
+    return db._row_get(empresa, "usuario_id") in set(ids)
+
+
+def _escopo_usuarios(usuario=None):
+    """Escritório que limita a tela de Usuários.
+
+    Devolve o ``escritorio_id`` cujos usuários podem ser listados/gerenciados,
+    ou ``None`` quando o usuário vê a base inteira (master fora do modo
+    suporte, ou gerente com acesso desenvolvedor).
+    """
+    usuario = usuario or g.get("usuario")
+    if not usuario:
+        return None
+
+    # Gerente (acesso desenvolvedor) gerencia usuários de todos os escritórios.
+    if db.eh_gerente(usuario):
+        return None
+
+    # Durante o modo suporte, o master gerencia os usuários do escritório
+    # atendido, e só ele.
+    if db.eh_master(usuario):
+        dados = session.get("suporte")
+        if dados:
+            try:
+                if datetime.now() < datetime.fromisoformat(dados["expira"]):
+                    return dados.get("escritorio_id")
+            except (KeyError, TypeError, ValueError):
+                session.pop("suporte", None)
+
+    return db._row_get(usuario, "escritorio_id")
+
+
+def _usuario_no_escopo(alvo, usuario=None):
+    """True se o usuário-alvo pertence ao mesmo escritório do logado."""
+    if not alvo:
+        return False
+    escopo = _escopo_usuarios(usuario)
+    if escopo is None:
+        return True
+    return db._row_get(alvo, "escritorio_id") == escopo
 
 
 def _codigo_item_lc116(item: str) -> str:
@@ -489,22 +617,19 @@ def registrar_rotas(app: Flask):
         usuario = g.usuario
         resumos = []
         simulacao_ativa = False
-        if usuario["is_admin"]:
-            id_alvo = request.args.get("usuario_id", type=int) or usuario["id"]
-        else:
-            id_alvo = usuario["id"]
+        # Cada cadastro só enxerga os seus próprios dados: o dashboard nunca
+        # aceita um usuario_id de terceiros (mesmo para admin), exceto quando
+        # o master está em modo suporte dentro do escritório atendido.
+        id_alvo = usuario["id"]
+        if db.eh_master(usuario):
+            pedido = request.args.get("usuario_id", type=int)
+            if pedido and pedido in (_ids_visiveis(usuario) or []):
+                id_alvo = pedido
 
         alvo = db.buscar_usuario_por_id(id_alvo) or usuario
 
-        # Usuário comum só enxerga os anexos identificados na própria empresa.
-        # O administrador continua vendo todos (ele acompanha qualquer usuário).
-        exibir_todos = bool(usuario["is_admin"])
-        if exibir_todos:
-            anexos_dashboard = list(ANEXOS_TODOS)
-        elif id_alvo == usuario["id"]:
-            anexos_dashboard = anexos_identificados(empresa_ativa())
-        else:
-            anexos_dashboard = []
+        # Anexos vêm sempre da empresa ativa do próprio usuário.
+        anexos_dashboard = anexos_identificados(empresa_ativa())
 
         for anexo in anexos_dashboard:
             emp = empresa_ativa()
@@ -533,7 +658,7 @@ def registrar_rotas(app: Flask):
         total_fat_mes = sum(r["faturamento_mes"] for r in resumos)
         max_rbt12 = max((r["rbt12"] for r in resumos), default=0)
 
-        usuarios = db.listar_usuarios() if usuario["is_admin"] else []
+        usuarios = db.listar_usuarios(escritorio_id=_escopo_usuarios()) if usuario["is_admin"] else []
         filtros = {a: [r for r in resumos if r["anexo"] == a] for a in anexos_dashboard}
 
         return render_template(
@@ -561,14 +686,17 @@ def registrar_rotas(app: Flask):
             return redirect(url_for("dashboard"))
 
         usuario = g.usuario
-        if usuario["is_admin"]:
-            id_alvo = request.args.get("usuario_id", type=int) or usuario["id"]
-        else:
-            id_alvo = usuario["id"]
+        # Os dados do anexo pertencem sempre a quem está logado. Só o master em
+        # modo suporte pode operar sobre outro usuário do escritório atendido.
+        id_alvo = usuario["id"]
+        if db.eh_master(usuario):
+            pedido = request.args.get("usuario_id", type=int)
+            if pedido and pedido in (_ids_visiveis(usuario) or []):
+                id_alvo = pedido
         alvo = db.buscar_usuario_por_id(id_alvo) or usuario
 
-        # Usuário comum só acessa anexos identificados na própria empresa.
-        if not usuario["is_admin"] and anexo not in anexos_identificados(empresa_ativa()):
+        # O anexo precisa estar identificado na empresa ativa do usuário.
+        if anexo not in anexos_identificados(empresa_ativa()):
             flash("Este anexo não está identificado no cadastro da sua empresa.", "aviso")
             return redirect(url_for("dashboard"))
 
@@ -777,10 +905,16 @@ def registrar_rotas(app: Flask):
     @app.route("/admin")
     @permissao_required("gerenciar_usuarios")
     def admin():
-        """Painel de gerenciamento de usuários (listagem)."""
+        """Painel de gerenciamento de usuários (listagem).
+
+        Cada escritório enxerga somente os próprios usuários. O master vê a
+        carteira inteira apenas na Carteira, onde cada escritório é isolado.
+        Durante o modo suporte, a lista acompanha o escritório atendido.
+        """
         try:
-            usuarios = db.listar_usuarios()
-            empresas = db.listar_empresas()
+            escopo = _escopo_usuarios()
+            usuarios = db.listar_usuarios(escritorio_id=escopo)
+            empresas = empresas_visiveis()
             return render_template("admin.html", usuarios=usuarios, empresas=empresas)
         except Exception as e:
             import traceback
@@ -815,6 +949,16 @@ def registrar_rotas(app: Flask):
             if db.buscar_usuario_por_email(email):
                 erros.append("Já existe um usuário com este e-mail.")
 
+            # Ativar o perfil gerente (acesso desenvolvedor) é exclusivo do
+            # master: um gerente pode gerenciar usuários comuns, mas não
+            # promover ninguém — nem a si mesmo — a gerente. A flag enviada
+            # é simplesmente ignorada (o usuário é criado como comum).
+            is_gerente = request.form.get("is_gerente") == "on"
+            if is_gerente and not db.eh_master(g.usuario):
+                is_gerente = False
+                flash("Apenas o master pode conceder o perfil gerente. "
+                      "O usuário foi cadastrado como usuário comum.", "aviso")
+
             if erros:
                 for e in erros:
                     flash(e, "erro")
@@ -823,32 +967,52 @@ def registrar_rotas(app: Flask):
                     nome, email, senha,
                     is_admin=is_admin, ativo=ativo,
                     permissoes=permissoes, empresa_id=empresa_id,
+                    # O novo usuário nasce no mesmo escritório de quem o cria.
+                    escritorio_id=_escopo_usuarios(),
+                    is_gerente=is_gerente,
                 )
-                db.registrar_log(g.usuario, "criar_usuario", f"{nome} <{email}>")
+                db.registrar_log(
+                    g.usuario, "criar_usuario",
+                    f"{nome} <{email}>" + (" [gerente]" if is_gerente else ""),
+                )
                 flash(f"Usuário {nome} cadastrado com sucesso.", "ok")
                 return redirect(url_for("admin"))
 
         return render_template(
             "usuario_form.html",
             usuario=None,
-            empresas=db.listar_empresas(),
+            empresas=empresas_visiveis(),
             permissoes=db.PERMISSOES_DISPONIVEIS,
             get_permissoes=db.get_permissoes,
+            editando_master=False,
+            pode_mexer_perfil=db.eh_master(g.usuario),
         )
 
     @app.route("/admin/usuario/<int:user_id>/editar", methods=["GET", "POST"])
     @permissao_required("gerenciar_usuarios")
     def admin_usuario_editar(user_id):
         usuario = db.buscar_usuario_por_id(user_id)
-        if not usuario:
+        if not usuario or not _usuario_no_escopo(usuario):
             flash("Usuário não encontrado.", "erro")
             return redirect(url_for("admin"))
+
+        # Só o master pode conceder os perfis master/gerente. Para os demais,
+        # o perfil do alvo é preservado.
+        pode_mexer_perfil = db.eh_master(g.usuario)
+        eh_master_alvo = db.eh_master(usuario)
+        eh_gerente_alvo = db.eh_gerente(usuario)
 
         if request.method == "POST":
             nome = request.form.get("nome", "").strip()
             email = request.form.get("email", "").strip()
             senha = request.form.get("senha", "")
-            is_admin = request.form.get("is_admin") == "on"
+            if pode_mexer_perfil:
+                is_admin = request.form.get("is_admin") == "on"
+                is_gerente = request.form.get("is_gerente") == "on"
+            else:
+                is_admin = bool(usuario["is_admin"])
+                # None = preserva o perfil atual do usuário editado.
+                is_gerente = None
             ativo = request.form.get("ativo") == "on"
             empresa_id = request.form.get("empresa_id", type=int) or None
 
@@ -869,6 +1033,10 @@ def registrar_rotas(app: Flask):
             if existente and existente["id"] != user_id:
                 erros.append("Já existe outro usuário com este e-mail.")
 
+            if not pode_mexer_perfil and eh_master_alvo:
+                # Não-master não altera dados do master do sistema.
+                erros.append("Você não tem permissão para alterar este usuário.")
+
             if erros:
                 for e in erros:
                     flash(e, "erro")
@@ -878,17 +1046,24 @@ def registrar_rotas(app: Flask):
                     senha=senha or None,
                     is_admin=is_admin, ativo=ativo,
                     permissoes=permissoes, empresa_id=empresa_id,
+                    is_gerente=is_gerente,
                 )
-                db.registrar_log(g.usuario, "editar_usuario", f"{nome} <{email}>")
+                db.registrar_log(
+                    g.usuario, "editar_usuario",
+                    f"{nome} <{email}>" + (" [gerente]" if is_gerente else ""),
+                )
                 flash(f"Usuário {nome} atualizado.", "ok")
                 return redirect(url_for("admin"))
 
         return render_template(
             "usuario_form.html",
             usuario=usuario,
-            empresas=db.listar_empresas(),
+            empresas=empresas_visiveis(),
             permissoes=db.PERMISSOES_DISPONIVEIS,
             get_permissoes=db.get_permissoes,
+            editando_master=eh_master_alvo and not pode_mexer_perfil,
+            pode_mexer_perfil=pode_mexer_perfil,
+            eh_gerente_alvo=eh_gerente_alvo,
         )
 
     @app.route("/admin/usuario/<int:user_id>/excluir", methods=["POST"])
@@ -899,8 +1074,12 @@ def registrar_rotas(app: Flask):
             return redirect(url_for("admin"))
 
         alvo = db.buscar_usuario_por_id(user_id)
-        if not alvo:
+        if not alvo or not _usuario_no_escopo(alvo):
             flash("Usuário não encontrado.", "erro")
+            return redirect(url_for("admin"))
+
+        if db.eh_master(alvo) and not db.eh_master(g.usuario):
+            flash("Você não tem permissão para excluir este usuário.", "erro")
             return redirect(url_for("admin"))
 
         db.excluir_usuario(user_id)
@@ -908,17 +1087,283 @@ def registrar_rotas(app: Flask):
         flash(f"Usuário {alvo['nome']} excluído.", "ok")
         return redirect(url_for("admin"))
 
+    # ------------------------- Carteira de clientes --------------------------
+    # Gestão dos escritórios licenciados. Exclusivo do master.
+    # O master NÃO vê os dados das empresas desses escritórios, exceto quando
+    # abre um "modo suporte" explícito, com validade limitada e registrado
+    # no log de auditoria.
+
+    SUPORTE_MINUTOS = 30
+
+    def _suporte_ativo():
+        """Dados do modo suporte em vigor, ou None.
+
+        Devolve um dict com ``escritorio_id``, ``razao_social`` e ``expira``.
+        Expirado, é limpo automaticamente.
+        """
+        dados = session.get("suporte")
+        if not dados:
+            return None
+        try:
+            expira = datetime.fromisoformat(dados["expira"])
+        except (KeyError, ValueError, TypeError):
+            session.pop("suporte", None)
+            return None
+        if datetime.now() >= expira:
+            session.pop("suporte", None)
+            return None
+        return dados
+
+    @app.route("/carteira")
+    @master_required
+    def carteira():
+        busca = (request.args.get("q") or "").strip()
+        lista = db.listar_escritorios(busca=busca or None)
+        return render_template(
+            "carteira.html",
+            escritorios=lista,
+            busca=busca,
+            suporte=_suporte_ativo(),
+        )
+
+    def _permissoes_do_form():
+        """Permissões marcadas no formulário da carteira."""
+        return {
+            p: True
+            for p in db.PERMISSOES_DISPONIVEIS
+            if request.form.get(f"perm_{p}") == "on"
+        }
+
+    @app.route("/carteira/novo", methods=["GET", "POST"])
+    @master_required
+    def carteira_novo():
+        if request.method == "POST":
+            razao = (request.form.get("razao_social") or "").strip()
+            admin_email = (request.form.get("admin_email") or "").strip().lower()
+            admin_nome = (request.form.get("admin_nome") or "").strip()
+            admin_senha = request.form.get("admin_senha") or ""
+
+            erros = []
+            if not razao:
+                erros.append("Informe a razão social do cliente.")
+            if not admin_email:
+                erros.append("Informe o e-mail de acesso do cliente.")
+            elif db.buscar_usuario_por_email(admin_email):
+                erros.append("Já existe um usuário com este e-mail.")
+            if admin_senha and len(admin_senha) < 6:
+                erros.append("A senha deve ter no mínimo 6 caracteres.")
+
+            if erros:
+                for e in erros:
+                    flash(e, "erro")
+                return render_template(
+                    "carteira_form.html", escritorio=None,
+                    form=request.form, admins=db.listar_usuarios(),
+                    permissoes=db.PERMISSOES_DISPONIVEIS,
+                    perms_marcadas=set(_permissoes_do_form()),
+                )
+
+            # Cria o usuário do cliente e o vínculo na carteira.
+            import secrets
+            senha_gerada = admin_senha or secrets.token_urlsafe(9)
+            # Cliente da carteira NUNCA é admin: entra apenas com as
+            # permissões que o master marcou.
+            uid = db.criar_usuario(
+                admin_nome or razao, admin_email, senha_gerada,
+                is_admin=False, permissoes=_permissoes_do_form(),
+            )
+            # A empresa é do CLIENTE: usuario_id recebe o id do usuário que
+            # acabamos de criar (não o do master). Assim o cliente, ao logar,
+            # enxerga apenas a própria empresa.
+            db.criar_empresa(
+                uid, razao,
+                nome_fantasia=request.form.get("nome_fantasia") or "",
+                cnpj=request.form.get("cnpj") or "",
+                municipio=request.form.get("municipio") or "",
+                uf=request.form.get("uf") or "",
+                observacoes=request.form.get("observacoes") or "",
+            )
+            escritorio_id = db.criar_escritorio(
+                uid, razao,
+                cnpj=request.form.get("cnpj") or "",
+                nome_fantasia=request.form.get("nome_fantasia") or "",
+                email=request.form.get("email") or "",
+                telefone=request.form.get("telefone") or "",
+                municipio=request.form.get("municipio") or "",
+                uf=request.form.get("uf") or "",
+                observacoes=request.form.get("observacoes") or "",
+                senha_clara=senha_gerada,
+            )
+            db.definir_escritorio_usuario(uid, escritorio_id)
+            db.registrar_log(
+                g.usuario, "criar_escritorio", f"{razao} <{admin_email}>",
+            )
+
+            if not admin_senha:
+                flash(
+                    f"Cliente criado. Acesso: {admin_email} / senha: "
+                    f"{senha_gerada} — a senha fica visível na Carteira.",
+                    "ok",
+                )
+            else:
+                flash(f"Cliente criado. Acesso: {admin_email}", "ok")
+            return redirect(url_for("carteira"))
+
+        return render_template(
+            "carteira_form.html", escritorio=None, form={},
+            admins=db.listar_usuarios(),
+            permissoes=db.PERMISSOES_DISPONIVEIS,
+            perms_marcadas=set(),
+        )
+
+    @app.route("/carteira/<int:escritorio_id>/editar", methods=["GET", "POST"])
+    @master_required
+    def carteira_editar(escritorio_id):
+        escritorio = db.buscar_escritorio_por_id(escritorio_id)
+        if not escritorio:
+            flash("Escritório não encontrado.", "erro")
+            return redirect(url_for("carteira"))
+
+        usuario_cliente = db.buscar_usuario_por_id(escritorio["usuario_id"])
+
+        if request.method == "POST":
+            razao = (request.form.get("razao_social") or "").strip()
+            nova_senha = (request.form.get("admin_senha") or "").strip()
+
+            erros = []
+            if not razao:
+                erros.append("Informe a razão social.")
+            if nova_senha and len(nova_senha) < 6:
+                erros.append("A senha deve ter no mínimo 6 caracteres.")
+
+            if erros:
+                for e in erros:
+                    flash(e, "erro")
+                return render_template(
+                    "carteira_form.html", escritorio=escritorio,
+                    form=request.form, admins=db.listar_usuarios(),
+                    permissoes=db.PERMISSOES_DISPONIVEIS,
+                    perms_marcadas=set(_permissoes_do_form()),
+                )
+
+            ativo = bool(request.form.get("ativo"))
+            email_login = (request.form.get("admin_email") or "").strip().lower()
+
+            db.atualizar_escritorio(
+                escritorio_id, razao,
+                cnpj=request.form.get("cnpj") or "",
+                nome_fantasia=request.form.get("nome_fantasia") or "",
+                email=request.form.get("email") or "",
+                telefone=request.form.get("telefone") or "",
+                municipio=request.form.get("municipio") or "",
+                uf=request.form.get("uf") or "",
+                observacoes=request.form.get("observacoes") or "",
+                ativo=ativo,
+                # Só sobrescreve a senha legível quando o master digitou uma
+                # nova; sem isso, a senha atual é preservada.
+                senha_clara=nova_senha or None,
+            )
+
+            # Atualiza o perfil de acesso do cliente: mesma senha para
+            # autenticação e para exibição, e as permissões marcadas agora.
+            if usuario_cliente:
+                db.atualizar_usuario(
+                    usuario_cliente["id"],
+                    usuario_cliente["nome"],
+                    email_login or usuario_cliente["email"],
+                    senha=nova_senha or None,
+                    is_admin=False,
+                    ativo=ativo,
+                    permissoes=_permissoes_do_form(),
+                    # Preserva o vínculo com a empresa: atualizar_usuario
+                    # grava empresa_id sempre, então repassamos o atual.
+                    empresa_id=usuario_cliente["empresa_id"],
+                )
+
+            db.registrar_log(
+                g.usuario, "editar_escritorio",
+                f"{razao}{' (senha redefinida)' if nova_senha else ''}",
+            )
+            flash(
+                "Cliente atualizado." + (
+                    " A senha anterior não funciona mais." if nova_senha else ""
+                ),
+                "ok",
+            )
+            return redirect(url_for("carteira"))
+
+        return render_template(
+            "carteira_form.html", escritorio=escritorio, form={},
+            admins=db.listar_usuarios(),
+            permissoes=db.PERMISSOES_DISPONIVEIS,
+            perms_marcadas=(
+                db.get_permissoes(usuario_cliente) if usuario_cliente else set()
+            ),
+        )
+
+    @app.route("/carteira/<int:escritorio_id>/excluir", methods=["POST"])
+    @master_required
+    def carteira_excluir(escritorio_id):
+        escritorio = db.buscar_escritorio_por_id(escritorio_id)
+        if not escritorio:
+            flash("Escritório não encontrado.", "erro")
+            return redirect(url_for("carteira"))
+        db.excluir_escritorio(escritorio_id)
+        db.registrar_log(g.usuario, "excluir_escritorio", escritorio["razao_social"])
+        flash(
+            f"Escritório {escritorio['razao_social']} removido da carteira. "
+            "O usuário administrador continua ativo.",
+            "ok",
+        )
+        return redirect(url_for("carteira"))
+
+    @app.route("/carteira/<int:escritorio_id>/suporte", methods=["POST"])
+    @master_required
+    def carteira_suporte(escritorio_id):
+        """Abre o modo suporte: acesso temporário e auditado aos dados."""
+        escritorio = db.buscar_escritorio_por_id(escritorio_id)
+        if not escritorio:
+            flash("Escritório não encontrado.", "erro")
+            return redirect(url_for("carteira"))
+
+        expira = datetime.now() + timedelta(minutes=SUPORTE_MINUTOS)
+        session["suporte"] = {
+            "escritorio_id": escritorio_id,
+            "razao_social": escritorio["razao_social"],
+            "expira": expira.isoformat(timespec="seconds"),
+        }
+        db.registrar_log(
+            g.usuario, "suporte_iniciado",
+            f"{escritorio['razao_social']} (até {expira.strftime('%H:%M')})",
+        )
+        flash(
+            f"Modo suporte ativo para {escritorio['razao_social']} "
+            f"até {expira.strftime('%H:%M')}. Este acesso foi registrado.",
+            "aviso",
+        )
+        return redirect(url_for("empresas"))
+
+    @app.route("/carteira/suporte/encerrar", methods=["POST"])
+    @master_required
+    def carteira_suporte_encerrar():
+        dados = _suporte_ativo()
+        session.pop("suporte", None)
+        if dados:
+            db.registrar_log(
+                g.usuario, "suporte_encerrado", dados.get("razao_social", ""),
+            )
+            flash("Modo suporte encerrado.", "ok")
+        return redirect(url_for("carteira"))
+
     # ---------------------------- Empresas -----------------------------------
 
     @app.route("/empresas")
     @permissao_required("gerenciar_empresas")
     @login_required
     def empresas():
-        usuario = g.usuario
-        if usuario["is_admin"]:
-            lista = db.listar_empresas()
-        else:
-            lista = db.listar_empresas(usuario_id=usuario["id"])
+        # Cada usuário vê apenas as empresas que ele mesmo cadastrou.
+        # No modo suporte, o master vê as do escritório atendido.
+        lista = empresas_visiveis(g.usuario)
         return render_template("empresas.html", empresas=lista, grupos=cnaes.listar_grupos())
 
     # ------------------- Importação de XMLs fiscais (saídas) ------------------
@@ -1053,7 +1498,7 @@ def registrar_rotas(app: Flask):
             return jsonify({"erro": f"Não foi possível ler o PDF: {exc}"}), 400
 
         # Localiza a empresa do extrato entre as empresas do próprio usuário.
-        empresas = db.listar_empresas(usuario_id=g.usuario["id"])
+        empresas = empresas_visiveis(g.usuario)
         empresa = _casar_empresa_extrato(dados, empresas)
 
         if empresa is None:
@@ -1113,8 +1558,8 @@ def registrar_rotas(app: Flask):
         empresa = db.buscar_empresa_por_id(int(empresa_id))
         if not empresa:
             return jsonify({"erro": "Empresa não encontrada."}), 404
-        if not usuario["is_admin"] and empresa["usuario_id"] != usuario["id"]:
-            return jsonify({"erro": "Você não tem acesso a esta empresa."}), 403
+        if not pode_ver_empresa(empresa, usuario):
+            return jsonify({"erro": "Empresa não encontrada."}), 404
 
         anexos = anexos_identificados(empresa) or []
         if not anexos:
@@ -1212,11 +1657,8 @@ def registrar_rotas(app: Flask):
     @login_required
     def empresa_editar(empresa_id):
         empresa = db.buscar_empresa_por_id(empresa_id)
-        if not empresa:
+        if not empresa or not pode_ver_empresa(empresa):
             flash("Empresa não encontrada.", "erro")
-            return redirect(url_for("empresas"))
-        if not g.usuario["is_admin"] and empresa["usuario_id"] != g.usuario["id"]:
-            flash("Você não tem acesso a esta empresa.", "erro")
             return redirect(url_for("empresas"))
 
         if request.method == "POST":
@@ -1706,11 +2148,8 @@ def registrar_rotas(app: Flask):
     @login_required
     def empresa_excluir(empresa_id):
         empresa = db.buscar_empresa_por_id(empresa_id)
-        if not empresa:
+        if not empresa or not pode_ver_empresa(empresa):
             flash("Empresa não encontrada.", "erro")
-            return redirect(url_for("empresas"))
-        if not g.usuario["is_admin"] and empresa["usuario_id"] != g.usuario["id"]:
-            flash("Você não tem acesso a esta empresa.", "erro")
             return redirect(url_for("empresas"))
         db.excluir_empresa(empresa_id)
         db.registrar_log(g.usuario, "excluir_empresa", empresa["razao_social"])
@@ -1721,11 +2160,8 @@ def registrar_rotas(app: Flask):
     @login_required
     def empresa_selecionar(empresa_id):
         empresa = db.buscar_empresa_por_id(empresa_id)
-        if not empresa:
+        if not empresa or not pode_ver_empresa(empresa):
             flash("Empresa não encontrada.", "erro")
-            return redirect(url_for("empresas"))
-        if not g.usuario["is_admin"] and empresa["usuario_id"] != g.usuario["id"]:
-            flash("Você não tem acesso a esta empresa.", "erro")
             return redirect(url_for("empresas"))
         db.definir_empresa_usuario(g.usuario["id"], empresa_id)
         db.registrar_log(g.usuario, "selecionar_empresa", empresa["razao_social"])
@@ -1887,7 +2323,7 @@ def registrar_rotas(app: Flask):
 
     @app.route("/admin/tabelas", methods=["GET", "POST"])
     @permissao_required("editar_tabelas")
-    @admin_required
+    @master_required
     def admin_tabelas():
         if request.method == "POST":
             try:
@@ -1914,7 +2350,7 @@ def registrar_rotas(app: Flask):
 
     @app.route("/admin/tabelas/cnae-item", methods=["GET", "POST"])
     @permissao_required("editar_tabelas")
-    @admin_required
+    @master_required
     def admin_cnae_item():
         """Edita o vínculo CNAE -> item que define o código de serviço.
 
@@ -1995,7 +2431,7 @@ def registrar_rotas(app: Flask):
 
     @app.route("/admin/tabelas/cnae-anexo", methods=["GET", "POST"])
     @permissao_required("editar_tabelas")
-    @admin_required
+    @master_required
     def admin_cnae_anexo():
         """Edita a relação CNAE -> Anexo usada no enquadramento.
 
@@ -2156,6 +2592,143 @@ def registrar_rotas(app: Flask):
     def admin_logs():
         return render_template("logs.html", logs=db.listar_logs(200))
 
+    # ------------------------------ Backup -----------------------------------
+
+    def _pasta_backup_padrao() -> str:
+        """Sugere uma pasta de backups dentro de Documentos do usuário."""
+        base = os.path.join(os.path.expanduser("~"), "Documents", "Backups Simples Nacional")
+        if os.name == "nt":
+            # Em Windows, "Documents" pode estar redirecionado (OneDrive etc.).
+            for nome in ("Documents", "Documentos"):
+                candidato = os.path.join(os.path.expanduser("~"), nome)
+                if os.path.isdir(candidato):
+                    base = os.path.join(candidato, "Backups Simples Nacional")
+                    break
+        return base
+
+    def _copiar_banco(destino_arquivo: str) -> None:
+        """Copia o banco SQLite usando a API oficial de backup do sqlite3.
+
+        Diferente de copiar o arquivo com shutil, a API ``Connection.backup``
+        gera uma cópia consistente mesmo com o app em uso (inclusive com o
+        journal WAL), sem risco de pegar o arquivo no meio de uma escrita.
+        """
+        origem = db.get_db()
+        destino = sqlite3.connect(destino_arquivo)
+        try:
+            origem.backup(destino)
+        finally:
+            destino.close()
+
+    @app.route("/admin/backup", methods=["GET", "POST"])
+    @admin_required
+    def admin_backup():
+        banco = current_app.config["DATABASE"]
+        resultado = None
+        if request.method == "POST":
+            bruto = (request.form.get("pasta") or "").strip().strip('"')
+            pastas = []
+            for parte in bruto.replace("\n", ";").split(";"):
+                parte = parte.strip().strip('"')
+                if parte:
+                    pastas.append(os.path.expandvars(os.path.expanduser(parte)))
+            if not pastas:
+                flash("Informe a pasta de destino do backup.", "erro")
+                return redirect(url_for("admin_backup"))
+
+            nome = f"backup_simples_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.db"
+            resultado = []
+            for pasta in pastas:
+                item = {"pasta": pasta, "nome": nome, "ok": False,
+                        "tamanho_kb": 0, "erro": ""}
+                try:
+                    os.makedirs(pasta, exist_ok=True)
+                    caminho = os.path.join(pasta, nome)
+                    _copiar_banco(caminho)
+                    item["tamanho_kb"] = round(os.path.getsize(caminho) / 1024, 1)
+                    item["ok"] = True
+                except OSError as e:
+                    item["erro"] = (
+                        "'Permissão negada' (pasta protegida ou caminho de rede) — "
+                        if getattr(e, "errno", None) in (13, 1) else ""
+                    ) + str(e)
+                resultado.append(item)
+
+            gravados = [r for r in resultado if r["ok"]]
+            if gravados:
+                db.registrar_log(
+                    g.usuario, "backup",
+                    "; ".join(f"{r['pasta']}\\{r['nome']}" for r in gravados),
+                )
+                flash(
+                    f"Backup gerado com sucesso em {len(gravados)} pasta(s): {nome}",
+                    "ok",
+                )
+            else:
+                flash("Não foi possível gravar o backup. Veja o motivo abaixo.", "erro")
+            session["backup_resultado"] = resultado
+
+        resultado = resultado or session.pop("backup_resultado", None)
+
+        # Lista os backups mais recentes encontrados nas pastas usadas.
+        backups = []
+        vistos = set()
+        pastas_busca = [r["pasta"] for r in (resultado or []) if r.get("ok")]
+        pastas_busca.append(_pasta_backup_padrao())
+        for pasta in pastas_busca:
+            try:
+                nomes = os.listdir(pasta)
+            except OSError:
+                continue
+            for arq in nomes:
+                if not (arq.startswith("backup_simples_") and arq.endswith(".db")):
+                    continue
+                caminho = os.path.join(pasta, arq)
+                if caminho in vistos:
+                    continue
+                vistos.add(caminho)
+                try:
+                    st = os.stat(caminho)
+                except OSError:
+                    continue
+                backups.append({
+                    "nome": arq,
+                    "tamanho_kb": round(st.st_size / 1024, 1),
+                    "data": datetime.fromtimestamp(st.st_mtime).strftime("%d/%m/%Y %H:%M"),
+                    "_ts": st.st_mtime,
+                })
+        backups.sort(key=lambda b: b["_ts"], reverse=True)
+
+        try:
+            tamanho_banco_kb = round(os.path.getsize(banco) / 1024, 1)
+        except OSError:
+            tamanho_banco_kb = 0
+
+        pasta_padrao = (
+            (resultado[0]["pasta"] if resultado else _pasta_backup_padrao())
+        )
+        return render_template(
+            "admin_backup.html",
+            resultado=resultado,
+            backups=backups[:10],
+            pasta_padrao=pasta_padrao,
+            banco_nome=os.path.basename(banco),
+            banco_tamanho_kb=tamanho_banco_kb,
+        )
+
+    @app.route("/admin/backup/baixar")
+    @admin_required
+    def admin_backup_baixar():
+        """Baixa a cópia de segurança pelo navegador (funciona em servidor remoto)."""
+        nome = f"backup_simples_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.db"
+        temp_dir = os.path.join(tempfile.gettempdir(), "simples_backups")
+        os.makedirs(temp_dir, exist_ok=True)
+        caminho = os.path.join(temp_dir, nome)
+        _copiar_banco(caminho)
+        db.registrar_log(g.usuario, "backup_download", nome)
+        return send_file(caminho, as_attachment=True, download_name=nome,
+                         mimetype="application/x-sqlite3")
+
     # ---------------------------- Erros --------------------------------------
 
     @app.errorhandler(404)
@@ -2194,6 +2767,11 @@ def bootstrap():
                 print("=" * 60)
             else:
                 print(f"[setup] Usuário admin criado -> {email} (senha definida via ambiente)")
+
+        # Garante que o admin configurado seja master. Só age se ainda não
+        # existir nenhum master, então nunca rebaixa nem sobrescreve uma
+        # promoção feita depois pelo dono do sistema.
+        db.garantir_master(db.get_db(), email)
 
 
 app = create_app()

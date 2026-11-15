@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+{% block titulo %}{{ 'Editar' if escritorio else 'Novo' }} cliente · Carteira{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>{{ 'Editar cliente' if escritorio else 'Novo cliente' }}</h1>
+    <p>Dados do cliente e do acesso que ele usará para entrar no sistema.</p>
+  </div>
+  <a class="btn secundario" href="{{ url_for('carteira') }}">← Voltar</a>
+</div>
+
+<form method="post" class="card">
+  <h3 style="margin-top:0">Dados do cliente</h3>
+
+  {# Primeiro passo do cadastro: o CNPJ puxa os dados da Receita. #}
+  <div class="campo">
+    <label for="cnpj">CNPJ</label>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="cnpj" name="cnpj" placeholder="00.000.000/0000-00"
+             maxlength="18" style="flex:1"
+             value="{{ form.get('cnpj') or (escritorio.cnpj if escritorio else '') }}">
+      <button type="button" class="btn secundario" id="btn-buscar-cnpj">Buscar na Receita</button>
+    </div>
+    <div class="texto-suave" id="status-cnpj" style="margin-top:4px">
+      Informe o CNPJ para preencher razão social, endereço e contato automaticamente.
+    </div>
+  </div>
+
+  <div class="campo">
+    <label for="razao_social">Razão social *</label>
+    <input type="text" id="razao_social" name="razao_social" required
+           value="{{ form.get('razao_social') or (escritorio.razao_social if escritorio else '') }}">
+  </div>
+
+  <div class="campo">
+    <label for="nome_fantasia">Nome fantasia</label>
+    <input type="text" id="nome_fantasia" name="nome_fantasia"
+           value="{{ form.get('nome_fantasia') or (escritorio.nome_fantasia if escritorio else '') }}">
+  </div>
+
+  <div class="campo">
+    <label for="email">E-mail de contato</label>
+    <input type="email" id="email" name="email"
+           value="{{ form.get('email') or (escritorio.email if escritorio else '') }}">
+  </div>
+
+  <div class="campo">
+    <label for="telefone">Telefone</label>
+    <input type="text" id="telefone" name="telefone"
+           value="{{ form.get('telefone') or (escritorio.telefone if escritorio else '') }}">
+  </div>
+
+  <div style="display:flex;gap:12px">
+    <div class="campo" style="flex:3">
+      <label for="municipio">Município</label>
+      <input type="text" id="municipio" name="municipio"
+             value="{{ form.get('municipio') or (escritorio.municipio if escritorio else '') }}">
+    </div>
+    <div class="campo" style="flex:1">
+      <label for="uf">UF</label>
+      <input type="text" id="uf" name="uf" maxlength="2"
+             value="{{ form.get('uf') or (escritorio.uf if escritorio else '') }}">
+    </div>
+  </div>
+
+  <div class="campo">
+    <label for="observacoes">Observações</label>
+    <textarea id="observacoes" name="observacoes" rows="3">{{ form.get('observacoes') or (escritorio.observacoes if escritorio else '') }}</textarea>
+  </div>
+
+  {% if escritorio %}
+  <div class="campo">
+    <label>
+      <input type="checkbox" name="ativo" {% if escritorio.ativo %}checked{% endif %}>
+      Cliente ativo
+    </label>
+  </div>
+
+  <hr style="margin:22px 0">
+  <h3 style="margin-top:0">Acesso do cliente</h3>
+  <p class="texto-suave" style="margin-top:-8px">
+    Login: <strong>{{ escritorio.usuario_email }}</strong>
+  </p>
+
+  <div class="campo">
+    <label for="admin_email">E-mail de acesso</label>
+    <input type="email" id="admin_email" name="admin_email"
+           value="{{ form.get('admin_email') or escritorio.usuario_email }}">
+  </div>
+
+  <div class="campo">
+    <label for="admin_senha">Nova senha</label>
+    <input type="text" id="admin_senha" name="admin_senha" autocomplete="off"
+           placeholder="Deixe em branco para manter a senha atual">
+    <small class="texto-suave">
+      Ao definir uma nova senha, a anterior deixa de funcionar imediatamente.
+    </small>
+  </div>
+
+  {% else %}
+  <hr style="margin:22px 0">
+  <h3 style="margin-top:0">Acesso do cliente</h3>
+  <p class="texto-suave" style="margin-top:-8px">
+    Este usuário entra como cliente, com as permissões marcadas abaixo.
+  </p>
+
+  <div class="campo">
+    <label for="admin_nome">Nome do responsável</label>
+    <input type="text" id="admin_nome" name="admin_nome"
+           value="{{ form.get('admin_nome') or '' }}">
+  </div>
+
+  <div class="campo">
+    <label for="admin_email">E-mail de acesso *</label>
+    <input type="email" id="admin_email" name="admin_email" required
+           value="{{ form.get('admin_email') or '' }}">
+  </div>
+
+  <div class="campo">
+    <label for="admin_senha">Senha inicial</label>
+    <input type="text" id="admin_senha" name="admin_senha" autocomplete="off"
+           placeholder="Deixe em branco para gerar automaticamente">
+    <small class="texto-suave">
+      A senha fica visível na Carteira, para você repassar ao cliente.
+    </small>
+  </div>
+  {% endif %}
+
+  <hr style="margin:22px 0">
+  <h3 style="margin-top:0">Permissões do cliente</h3>
+  <p class="texto-suave" style="margin-top:-8px">
+    O cliente só enxerga o que estiver marcado. Edição das tabelas do
+    sistema é exclusiva do master.
+  </p>
+  {% for chave, rotulo in permissoes.items() %}
+  <div class="campo">
+    <label>
+      <input type="checkbox" name="perm_{{ chave }}"
+             {% if chave in perms_marcadas %}checked{% endif %}>
+      {{ rotulo }}
+    </label>
+  </div>
+  {% endfor %}
+
+  <div class="acoes" style="margin-top:20px">
+    <button class="btn" type="submit">{{ 'Salvar alterações' if escritorio else 'Criar cliente' }}</button>
+    <a class="btn secundario" href="{{ url_for('carteira') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const campoCnpj = document.getElementById('cnpj');
+  const btnBuscar = document.getElementById('btn-buscar-cnpj');
+  const status = document.getElementById('status-cnpj');
+  if (!campoCnpj || !btnBuscar || !status) return;
+
+  const urlApi = '{{ url_for("api_consulta_cnpj", cnpj="__CNPJ__") }}';
+  const soDigitos = (v) => (v || '').replace(/\D+/g, '');
+
+  // Monta a máscara a partir dos dígitos crus: cada etapa reformata do zero,
+  // para que a barra e o hífen não se percam nem dupliquem dígitos.
+  function mascaraCnpj(v) {
+    const d = soDigitos(v).slice(0, 14);
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return d.slice(0, 2) + '.' + d.slice(2);
+    if (d.length <= 8) return d.slice(0, 2) + '.' + d.slice(2, 5) + '.' + d.slice(5);
+    if (d.length <= 12) {
+      return d.slice(0, 2) + '.' + d.slice(2, 5) + '.' + d.slice(5, 8) + '/' + d.slice(8);
+    }
+    return d.slice(0, 2) + '.' + d.slice(2, 5) + '.' + d.slice(5, 8) + '/' +
+           d.slice(8, 12) + '-' + d.slice(12);
+  }
+
+  campoCnpj.addEventListener('input', () => {
+    campoCnpj.value = mascaraCnpj(campoCnpj.value);
+  });
+
+  // Só preenche campos vazios: nada digitado pelo usuário é perdido.
+  function preencher(id, valor) {
+    if (!valor) return;
+    const el = document.getElementById(id);
+    if (!el || el.value.trim()) return;
+    el.value = valor;
+  }
+
+  // Valida os dois dígitos verificadores do CNPJ (bloqueia só o formato).
+  function cnpjValido(d) {
+    if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+    const calc = (base) => {
+      let peso = base.length - 7;
+      let soma = 0;
+      for (const ch of base) {
+        soma += Number(ch) * peso;
+        peso = peso === 2 ? 9 : peso - 1;
+      }
+      const resto = soma % 11;
+      return resto < 2 ? 0 : 11 - resto;
+    };
+    return calc(d.slice(0, 12)) === Number(d[12]) && calc(d.slice(0, 13)) === Number(d[13]);
+  }
+
+  async function buscarCnpj() {
+    const digitos = soDigitos(campoCnpj.value);
+    if (digitos.length !== 14) {
+      status.textContent = `⚠️ Informe os 14 dígitos do CNPJ (você digitou ${digitos.length}).`;
+      return;
+    }
+    if (!cnpjValido(digitos)) {
+      status.textContent = '⚠️ CNPJ inválido — confira os dígitos verificadores.';
+      return;
+    }
+    btnBuscar.disabled = true;
+    status.textContent = 'Consultando a Receita Federal…';
+    try {
+      const resp = await fetch(urlApi.replace('__CNPJ__', digitos));
+      const dados = await resp.json();
+      if (!resp.ok || dados.erro) {
+        status.textContent = '⚠️ ' + (dados.erro || 'Não foi possível consultar o CNPJ.');
+        return;
+      }
+      campoCnpj.value = dados.cnpj || campoCnpj.value;
+
+      // Razão social vem da Receita e sobrescreve o campo (é o dado oficial).
+      const razao = document.getElementById('razao_social');
+      if (razao && dados.razao_social) razao.value = dados.razao_social;
+
+      preencher('nome_fantasia', dados.nome_fantasia);
+      preencher('email', dados.email);
+      preencher('telefone', dados.telefone);
+      preencher('municipio', dados.municipio);
+      preencher('uf', dados.uf);
+
+      // Sugestões para o usuário administrador do escritório.
+      preencher('admin_email', dados.email);
+      preencher('admin_nome', dados.razao_social);
+
+      const situacao = dados.situacao_cadastral ? ` · Situação: ${dados.situacao_cadastral}` : '';
+      status.textContent = `✓ ${dados.razao_social}${situacao} — dados carregados.`;
+    } catch (err) {
+      status.textContent = '⚠️ Falha na consulta: ' + err.message;
+    } finally {
+      btnBuscar.disabled = false;
+    }
+  }
+
+  btnBuscar.addEventListener('click', buscarCnpj);
+  campoCnpj.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      buscarCnpj();
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -95,6 +95,31 @@ CREATE TABLE IF NOT EXISTS tabelas_base (
     UNIQUE(anexo, faixa)
 );
 
+-- Carteira de clientes do master: escritórios contábeis licenciados.
+-- Cada escritório tem um usuário administrador (usuario_id) que entra no
+-- sistema normalmente. Nada mais no app depende desta tabela.
+CREATE TABLE IF NOT EXISTS escritorios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    usuario_id INTEGER NOT NULL UNIQUE,
+    cnpj TEXT,
+    razao_social TEXT NOT NULL,
+    nome_fantasia TEXT,
+    email TEXT,
+    telefone TEXT,
+    municipio TEXT,
+    uf TEXT,
+    observacoes TEXT,
+    ativo INTEGER NOT NULL DEFAULT 1,
+    -- Senha de acesso do cliente, em texto legível. Existe apenas para o
+    -- master poder reler o login do cliente que ele mesmo criou. A
+    -- autenticação NÃO usa este campo: quem valida é usuarios.senha_hash.
+    -- Restrito a master_required e toda leitura é registrada no log.
+    senha_clara TEXT,
+    criado_em TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+);
+
 -- Vínculo oficial CNAE -> item da LC 116/2003 (Cnae_X_Item_Lista_Servicos).
 -- Editável pela aba Tabelas, para corrigir um vínculo sem republicar o app.
 CREATE TABLE IF NOT EXISTS cnae_itens_lc116 (
@@ -200,11 +225,115 @@ def init_db():
         db.commit()
     except Exception:
         pass  # coluna já existe
+    # Migração: marca quais usuários são master (acesso à Carteira de clientes
+    # e às tabelas do sistema). Coluna aditiva, não altera nada do existente.
+    try:
+        db.execute("ALTER TABLE usuarios ADD COLUMN is_master INTEGER NOT NULL DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Migração: escritório ao qual o usuário pertence (isolamento entre
+    # escritórios). NULL = usuário sem escritório, que segue vendo apenas as
+    # próprias empresas, como antes. Coluna aditiva.
+    try:
+        db.execute("ALTER TABLE usuarios ADD COLUMN escritorio_id INTEGER")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Migração: perfil "gerente" (acesso desenvolvedor). Fica entre o usuário
+    # comum e o master: vê todos os escritórios e todas as funções, inclusive
+    # a Carteira de clientes, mas NÃO cria nem edita outros gerentes/masters.
+    # Coluna aditiva; bancos antigos nascem com 0 (ninguém promovido).
+    try:
+        db.execute("ALTER TABLE usuarios ADD COLUMN is_gerente INTEGER NOT NULL DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Migração: senha legível do cliente na carteira, para o master reler o
+    # login criado por ele. Aditiva; bancos antigos ficam com NULL.
+    try:
+        db.execute("ALTER TABLE escritorios ADD COLUMN senha_clara TEXT")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
     db.commit()
     _seed_tabelas_base(db)
     _seed_cnae_itens_lc116(db)
     _seed_cnae_anexos(db)
     _seed_relacao_nbs(db)
+
+
+def garantir_master(db: sqlite3.Connection, email) -> None:
+    """Marca ``email`` como master. Se ainda não houver nenhum master no
+    banco, promove esse usuário (bootstrap do primeiro acesso).
+
+    Só promove quando não existe nenhum master, para nunca sobrescrever uma
+    escolha feita depois pelo dono do sistema.
+    """
+    if not email:
+        return
+    existente = db.execute(
+        "SELECT id FROM usuarios WHERE is_master=1 LIMIT 1"
+    ).fetchone()
+    if existente:
+        return
+    db.execute(
+        "UPDATE usuarios SET is_master=1 WHERE email=?",
+        (str(email).strip().lower(),),
+    )
+    db.commit()
+
+
+def definir_master(user_id, is_master=True, conn=None):
+    """Promove ou rebaixa um usuário a master."""
+    db = conn or get_db()
+    db.execute(
+        "UPDATE usuarios SET is_master=? WHERE id=?",
+        (1 if is_master else 0, user_id),
+    )
+    db.commit()
+
+
+def eh_master(usuario) -> bool:
+    """True se o usuário (linha de ``usuarios``) é master."""
+    return bool(_row_get(usuario, "is_master", 0))
+
+
+def eh_gerente(usuario) -> bool:
+    """True se o usuário tem o perfil gerente (acesso desenvolvedor).
+
+    O master também conta como gerente para fins de liberação de telas: quem
+    é master obviamente tem tudo o que o gerente tem.
+    """
+    return bool(_row_get(usuario, "is_gerente", 0))
+
+
+def tem_acesso_dev(usuario) -> bool:
+    """True para master ou gerente — os perfis que liberam TODAS as funções.
+
+    Usado no lugar de ``eh_master`` nas checagens de permissão de tela (ex.:
+    Carteira de clientes, edição das tabelas do sistema). A *gestão de
+    perfis* (criar/editar outro gerente ou master) continua exclusiva do
+    master e é checada separadamente com ``eh_master``.
+    """
+    return eh_master(usuario) or eh_gerente(usuario)
+
+
+def definir_gerente(user_id, is_gerente=True, conn=None):
+    """Promove ou rebaixa um usuário a gerente."""
+    db = conn or get_db()
+    db.execute(
+        "UPDATE usuarios SET is_gerente=? WHERE id=?",
+        (1 if is_gerente else 0, user_id),
+    )
+    db.commit()
+
+
+def listar_masters(conn=None):
+    db = conn or get_db()
+    return db.execute(
+        "SELECT * FROM usuarios WHERE is_master=1 ORDER BY nome"
+    ).fetchall()
 
 
 def _seed_tabelas_base(db: sqlite3.Connection):
@@ -282,25 +411,35 @@ PERMISSOES_DISPONIVEIS = {
     "gerenciar_usuarios": "Criar/editar/excluir usuários",
     "ver_relatorios": "Visualizar/baixar relatórios (Excel e PDF)",
     "ver_logs": "Visualizar logs de auditoria",
-    "editar_tabelas": "Editar tabelas de alíquotas e faixas",
+    # Consulta (somente leitura) das tabelas do sistema: CNAE x Anexo,
+    # CNAE x Item da LC 116/2003 e Relação NBS.
+    "ver_tabelas": "Consultar tabelas do sistema (CNAE, NBS, LC 116)",
+    # "editar_tabelas" NÃO é delegável: edição das tabelas do sistema é
+    # exclusiva de master (ver master_required em app.py).
     "consultar_cnpj": "Consultar CNPJ na Receita Federal",
     "ver_explicacao_cnae": "Ver explicação do enquadramento de CNAE (LC 116/2003)",
 }
 
-# Conjunto de permissões que o administrador tem por padrão (todas).
+# Conjunto de permissões que o administrador tem por padrão (todas as
+# delegáveis). Permissões de master são adicionadas em get_permissoes().
 PERMISSOES_ADMIN = set(PERMISSOES_DISPONIVEIS.keys())
 
 
 def get_permissoes(usuario) -> set:
     """Retorna um set com as permissões do usuário.
 
-    Administradores sempre têm todas as permissões, independentemente do
-    campo `permissoes` no banco.
+    Administradores recebem todas as permissões delegáveis (as de master,
+    como editar tabelas, ficam fora de PERMISSOES_DISPONIVEIS). O master e o
+    gerente recebem tudo, inclusive as de master.
     """
     if not usuario:
         return set()
+    permissoes = set(PERMISSOES_DISPONIVEIS.keys())
+    if eh_master(usuario) or eh_gerente(usuario):
+        permissoes.add("editar_tabelas")
+        return permissoes
     if _row_get(usuario, "is_admin"):
-        return set(PERMISSOES_ADMIN)
+        return permissoes
     raw = _row_get(usuario, "permissoes") or "{}"
     if isinstance(raw, str):
         try:
@@ -341,6 +480,7 @@ def salvar_permissoes(user_id: int, permissoes: set, conn=None):
 def criar_usuario(
     nome, email, senha, *,
     is_admin=False, ativo=True, permissoes=None, empresa_id=None, conn=None,
+    escritorio_id=None, is_gerente=False,
 ):
     db = conn or get_db()
     senha_hash, sal = hash_senha(senha)
@@ -348,12 +488,14 @@ def criar_usuario(
     permissoes_json = json.dumps(permissoes or {}, ensure_ascii=False)
     cur = db.execute(
         """INSERT INTO usuarios (nome, email, senha_hash, sal, is_admin, ativo,
-                                 empresa_id, permissoes, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 empresa_id, permissoes, criado_em, escritorio_id,
+                                 is_gerente)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (nome.strip(), email.strip().lower(), senha_hash, sal,
          1 if is_admin else 0, 1 if ativo else 0,
          empresa_id, permissoes_json,
-         datetime.now().isoformat(timespec="seconds")),
+         datetime.now().isoformat(timespec="seconds"), escritorio_id,
+         1 if is_gerente else 0),
     )
     db.commit()
     return cur.lastrowid
@@ -371,8 +513,18 @@ def buscar_usuario_por_id(user_id, conn=None):
     return db.execute("SELECT * FROM usuarios WHERE id = ?", (user_id,)).fetchone()
 
 
-def listar_usuarios(conn=None):
+def listar_usuarios(conn=None, escritorio_id=None):
+    """Usuários cadastrados.
+
+    Com ``escritorio_id``, devolve apenas os usuários daquele escritório.
+    Sem ele, devolve a carteira inteira (uso restrito ao master).
+    """
     db = conn or get_db()
+    if escritorio_id:
+        return db.execute(
+            "SELECT * FROM usuarios WHERE escritorio_id = ? ORDER BY is_admin DESC, nome",
+            (escritorio_id,),
+        ).fetchall()
     return db.execute(
         "SELECT * FROM usuarios ORDER BY is_admin DESC, nome"
     ).fetchall()
@@ -381,31 +533,37 @@ def listar_usuarios(conn=None):
 def atualizar_usuario(
     user_id, nome, email, *,
     senha=None, is_admin=False, ativo=True, permissoes=None, empresa_id=None, conn=None,
+    is_gerente=None,
 ):
+    """Atualiza um usuário.
+
+    ``is_gerente=None`` preserva o perfil de gerente atual (usado por quem não
+    tem permissão para mexer em perfis). Passar True/False altera o perfil.
+    """
     db = conn or get_db()
     import json
     permissoes_json = json.dumps(permissoes or {}, ensure_ascii=False)
 
+    sets = ["nome=?", "email=?", "is_admin=?", "ativo=?",
+            "empresa_id=?", "permissoes=?"]
+    params = [nome.strip(), email.strip().lower(),
+              1 if is_admin else 0, 1 if ativo else 0,
+              empresa_id, permissoes_json]
+
+    if is_gerente is not None:
+        sets.append("is_gerente=?")
+        params.append(1 if is_gerente else 0)
+
     if senha:
         senha_hash, sal = hash_senha(senha)
-        db.execute(
-            """UPDATE usuarios
-               SET nome=?, email=?, senha_hash=?, sal=?,
-                   is_admin=?, ativo=?, empresa_id=?, permissoes=?
-               WHERE id=?""",
-            (nome.strip(), email.strip().lower(), senha_hash, sal,
-             1 if is_admin else 0, 1 if ativo else 0,
-             empresa_id, permissoes_json, user_id),
-        )
-    else:
-        db.execute(
-            """UPDATE usuarios
-               SET nome=?, email=?, is_admin=?, ativo=?, empresa_id=?, permissoes=?
-               WHERE id=?""",
-            (nome.strip(), email.strip().lower(),
-             1 if is_admin else 0, 1 if ativo else 0,
-             empresa_id, permissoes_json, user_id),
-        )
+        sets.extend(["senha_hash=?", "sal=?"])
+        params.extend([senha_hash, sal])
+
+    params.append(user_id)
+    db.execute(
+        f"UPDATE usuarios SET {', '.join(sets)} WHERE id=?",
+        params,
+    )
     db.commit()
 
 
@@ -977,6 +1135,168 @@ def excluir_cnae_anexo(registro_id, conn=None):
 
 
 # ---------------------------------------------------------------------------
+# Escritórios (Carteira de clientes do master)
+# ---------------------------------------------------------------------------
+
+def criar_escritorio(
+    usuario_id, razao_social, *,
+    cnpj="", nome_fantasia="", email="", telefone="",
+    municipio="", uf="", observacoes="", ativo=True, senha_clara=None,
+    conn=None,
+):
+    """Vincula um usuário (o cliente da carteira) ao cadastro.
+
+    Devolve o id do escritório criado. ``usuario_id`` é único: um usuário
+    não pode ser cliente de dois cadastros.
+
+    ``senha_clara`` é a senha de acesso em texto legível, guardada só para
+    o master reapresentá-la ao cliente. Não é usada na autenticação.
+    """
+    db = conn or get_db()
+    agora = datetime.now().isoformat(timespec="seconds")
+    cur = db.execute(
+        """INSERT INTO escritorios
+           (usuario_id, cnpj, razao_social, nome_fantasia, email, telefone,
+            municipio, uf, observacoes, ativo, senha_clara,
+            criado_em, atualizado_em)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (usuario_id, cnpj or "", razao_social.strip(), nome_fantasia or "",
+         email or "", telefone or "", municipio or "", (uf or "").upper(),
+         observacoes or "", 1 if ativo else 0, senha_clara,
+         agora, agora),
+    )
+    db.commit()
+    return cur.lastrowid
+
+
+def listar_escritorios(busca=None, conn=None):
+    """Lista os escritórios da carteira, com dados do usuário admin."""
+    db = conn or get_db()
+    sql = """
+        SELECT e.*, u.nome AS usuario_nome, u.email AS usuario_email,
+               u.ativo AS usuario_ativo
+          FROM escritorios e
+          LEFT JOIN usuarios u ON u.id = e.usuario_id
+    """
+    params = ()
+    if busca:
+        termo = f"%{busca.strip()}%"
+        sql += """ WHERE e.razao_social LIKE ? OR e.nome_fantasia LIKE ?
+                      OR e.cnpj LIKE ? OR u.nome LIKE ? OR u.email LIKE ?"""
+        params = (termo, termo, termo, termo, termo)
+    sql += " ORDER BY e.razao_social"
+    return db.execute(sql, params).fetchall()
+
+
+def buscar_escritorio_por_id(escritorio_id, conn=None):
+    db = conn or get_db()
+    return db.execute(
+        """SELECT e.*, u.nome AS usuario_nome, u.email AS usuario_email,
+                  u.ativo AS usuario_ativo, u.is_admin AS usuario_is_admin
+             FROM escritorios e
+             LEFT JOIN usuarios u ON u.id = e.usuario_id
+            WHERE e.id = ?""",
+        (escritorio_id,),
+    ).fetchone()
+
+
+def buscar_escritorio_por_usuario(usuario_id, conn=None):
+    db = conn or get_db()
+    return db.execute(
+        "SELECT * FROM escritorios WHERE usuario_id = ?", (usuario_id,)
+    ).fetchone()
+
+
+def atualizar_escritorio(
+    escritorio_id, razao_social, *,
+    cnpj="", nome_fantasia="", email="", telefone="",
+    municipio="", uf="", observacoes="", ativo=True, senha_clara=None,
+    conn=None,
+):
+    """Atualiza o cadastro do cliente.
+
+    ``senha_clara`` só é sobrescrita quando informada (não-None). Com None,
+    a senha legível atual é preservada — evita apagar a senha ao editar
+    apenas os dados cadastrais.
+    """
+    db = conn or get_db()
+    if senha_clara is not None:
+        db.execute(
+            """UPDATE escritorios
+                  SET cnpj=?, razao_social=?, nome_fantasia=?, email=?,
+                      telefone=?, municipio=?, uf=?, observacoes=?, ativo=?,
+                      senha_clara=?, atualizado_em=?
+                WHERE id=?""",
+            (cnpj or "", razao_social.strip(), nome_fantasia or "", email or "",
+             telefone or "", municipio or "", (uf or "").upper(),
+             observacoes or "", 1 if ativo else 0, senha_clara,
+             datetime.now().isoformat(timespec="seconds"), escritorio_id),
+        )
+    else:
+        db.execute(
+            """UPDATE escritorios
+                  SET cnpj=?, razao_social=?, nome_fantasia=?, email=?,
+                      telefone=?, municipio=?, uf=?, observacoes=?, ativo=?,
+                      atualizado_em=?
+                WHERE id=?""",
+            (cnpj or "", razao_social.strip(), nome_fantasia or "", email or "",
+             telefone or "", municipio or "", (uf or "").upper(),
+             observacoes or "", 1 if ativo else 0,
+             datetime.now().isoformat(timespec="seconds"), escritorio_id),
+        )
+    db.commit()
+
+
+def excluir_escritorio(escritorio_id, conn=None):
+    """Remove apenas o vínculo da carteira; o usuário admin continua existindo.
+
+    A exclusão do usuário é uma ação separada e explícita, para não apagar
+    acesso por engano.
+    """
+    db = conn or get_db()
+    db.execute("DELETE FROM escritorios WHERE id=?", (escritorio_id,))
+    db.commit()
+
+
+def contar_escritorios(conn=None) -> int:
+    db = conn or get_db()
+    return db.execute("SELECT COUNT(*) FROM escritorios").fetchone()[0]
+
+
+def escritorio_do_usuario(usuario, conn=None):
+    """Escritório do usuário, ou None se ele não pertence a nenhum.
+
+    O vínculo vem da coluna ``usuarios.escritorio_id``. Aceita tanto um
+    sqlite3.Row quanto um dict; retorna a linha de ``escritorios``.
+    """
+    escritorio_id = _row_get(usuario, "escritorio_id")
+    if not escritorio_id:
+        return None
+    return buscar_escritorio_por_id(escritorio_id, conn=conn)
+
+
+def usuarios_do_escritorio(escritorio_id, conn=None):
+    """IDs dos usuários que compartilham a carteira do escritório."""
+    if not escritorio_id:
+        return []
+    db = conn or get_db()
+    linhas = db.execute(
+        "SELECT id FROM usuarios WHERE escritorio_id = ?", (escritorio_id,)
+    ).fetchall()
+    return [linha["id"] for linha in linhas]
+
+
+def definir_escritorio_usuario(usuario_id, escritorio_id, conn=None):
+    """Vincula (ou desvincula, com None) um usuário a um escritório."""
+    db = conn or get_db()
+    db.execute(
+        "UPDATE usuarios SET escritorio_id=? WHERE id=?",
+        (escritorio_id, usuario_id),
+    )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
 # Logs / auditoria
 # ---------------------------------------------------------------------------
 
@@ -1036,8 +1356,25 @@ def buscar_empresa_por_id(empresa_id, conn=None):
     return db.execute("SELECT * FROM empresas WHERE id = ?", (empresa_id,)).fetchone()
 
 
-def listar_empresas(usuario_id=None, conn=None):
+def listar_empresas(usuario_id=None, conn=None, usuario_ids=None):
+    """Lista empresas.
+
+    - ``usuario_id``: apenas as do dono indicado (comportamento original).
+    - ``usuario_ids``: as de qualquer dono da lista. É o que o escritório usa:
+      todas as empresas dos usuários que pertencem ao escritório.
+    - sem filtro: todas (uso interno/admin do sistema).
+    """
     db = conn or get_db()
+    if usuario_ids is not None:
+        ids = [int(i) for i in usuario_ids]
+        if not ids:
+            return []
+        marcadores = ",".join("?" for _ in ids)
+        return db.execute(
+            f"SELECT * FROM empresas WHERE usuario_id IN ({marcadores}) "
+            "ORDER BY razao_social",
+            ids,
+        ).fetchall()
     if usuario_id is not None:
         return db.execute(
             "SELECT * FROM empresas WHERE usuario_id = ? ORDER BY razao_social",

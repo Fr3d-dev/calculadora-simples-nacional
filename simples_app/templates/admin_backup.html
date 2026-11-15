@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block titulo %}Backup do sistema · Administração{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Backup do sistema</h1>
+    <p>Gere uma cópia completa do banco de dados em uma pasta de sua escolha.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>O que é salvo</h2>
+  <p style="margin:0 0 6px">
+    Um arquivo <strong>.db</strong> (SQLite) com <strong>todos os dados</strong> do sistema:
+    usuários, escritórios (carteira), empresas, faturamentos, tabelas do sistema e logs.
+  </p>
+  <p style="margin:0">
+    <strong>Banco atual:</strong> <code>{{ banco_nome }}</code>
+    — {{ banco_tamanho_kb }} KB.
+  </p>
+</div>
+
+<div class="card">
+  <h2>📍 Escolher a pasta de destino</h2>
+  <form method="post" action="{{ url_for('admin_backup') }}">
+    <label for="pasta">Caminho da pasta onde o backup será gravado</label>
+    <input type="text" id="pasta" name="pasta" value="{{ pasta_padrao }}"
+           placeholder="Ex.: D:\Backups\Simples Nacional" autocomplete="off">
+    <p class="texto-suave" style="font-size:12.5px;margin:6px 0 0">
+      Acesse o sistema pelo <strong>próprio PC que roda o app</strong> para que este caminho
+      corresponda a uma pasta real. Se a pasta não existir, ela é criada
+      automaticamente. Separe várias pastas com <code>;</code> para gravar em mais de um lugar.
+    </p>
+    <div class="acoes" style="margin-top:16px">
+      <button type="submit" class="btn">💾 Gerar backup nesta pasta</button>
+      <a class="btn secundario" href="{{ url_for('admin_backup_baixar') }}">
+        ⬇️ Baixar cópia para o computador
+      </a>
+    </div>
+  </form>
+</div>
+
+{% if resultado %}
+<div class="card">
+  <h2>Resultado do último backup</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Destino</th>
+        <th>Arquivo</th>
+        <th class="num">Tamanho</th>
+        <th>Situação</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in resultado %}
+      <tr>
+        <td><code>{{ item.pasta }}</code></td>
+        <td><code>{{ item.nome }}</code></td>
+        <td class="num">
+          {% if item.ok %}{{ item.tamanho_kb }} KB{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if item.ok %}
+            <span class="badge ativo">Gravado</span>
+          {% else %}
+            <span class="badge inativo">Falhou</span>
+            <div class="texto-suave" style="font-size:12px">{{ item.erro }}</div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>💾 Últimos backups gravados</h2>
+  {% if backups %}
+  <div class="tabela-responsiva">
+    <table>
+      <thead>
+        <tr>
+          <th>Arquivo</th>
+          <th class="num">Tamanho</th>
+          <th>Criado em</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in backups %}
+        <tr>
+          <td><code>{{ b.nome }}</code></td>
+          <td class="num">{{ b.tamanho_kb }} KB</td>
+          <td class="texto-suave" style="font-size:0.85em">{{ b.data }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="texto-suave" style="margin:0">
+    Nenhum backup gravado em disco ainda. Use o botão acima para gerar o primeiro.
+  </p>
+  {% endif %}
+</div>
+
+<div class="flash aviso">
+  Guarde o arquivo de backup em outro disco, pendrive ou nuvem. O backup fica na máquina
+  onde o sistema roda — se esse computador falhar, o backup também é perdido.
+</div>
+{% endblock %}
