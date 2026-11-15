@@ -45,6 +45,12 @@ consertar_banco.py
 excel_output.txt
 resumo_build.txt
 
+# Saídas de teste/console (podem conter a senha gerada do admin)
+resul.txt
+_resultado_teste.txt
+*_saida.txt
+*_output.txt
+
 # Rascunhos descartáveis (scripts de bastidor e dumps)
 /_*
 !/_inspect.py
