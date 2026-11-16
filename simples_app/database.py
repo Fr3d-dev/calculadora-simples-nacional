@@ -39,12 +39,19 @@ CREATE TABLE IF NOT EXISTS usuarios (
     empresa_id INTEGER,
     permissoes TEXT DEFAULT '{}',
     criado_em TEXT NOT NULL,
+    -- "interno" = criado na aba Usuários; "carteira" = cliente criado na
+    -- Carteira de clientes. Cada origem aparece só na sua própria tela.
+    origem TEXT NOT NULL DEFAULT 'interno',
     FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS empresas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER NOT NULL,
+    -- Código curto digitado pelo usuário para achar a empresa rapidamente
+    -- ("1", "12", "007"...). Fica como TEXT para preservar zeros à esquerda,
+    -- mas a ordenação é numérica. A sequência é global.
+    codigo TEXT,
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
     cnpj TEXT,
@@ -256,6 +263,52 @@ def init_db():
         db.commit()
     except Exception:
         pass  # coluna já existe
+    # Migração: separa quem foi cadastrado na aba Usuários ("interno") de
+    # quem nasceu na Carteira de clientes ("carteira"). Aditiva; bancos
+    # antigos nascem internos e são corrigidos logo abaixo pelo vínculo
+    # existente em escritorios.usuario_id.
+    try:
+        db.execute(
+            "ALTER TABLE usuarios ADD COLUMN origem TEXT NOT NULL DEFAULT 'interno'"
+        )
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Backfill idempotente: todo usuário que é dono de um escritório da
+    # carteira passa a ser origem='carteira'. Roda sempre (custo desprezível)
+    # e não sobrescreve mais nada depois de aplicado.
+    db.execute(
+        """UPDATE usuarios SET origem='carteira'
+            WHERE origem <> 'carteira'
+              AND id IN (SELECT usuario_id FROM escritorios
+                          WHERE usuario_id IS NOT NULL)"""
+    )
+    db.commit()
+    # Migração: código curto da empresa, digitado no cadastro. Aditiva; nos
+    # bancos antigos as empresas já existentes recebem um número sequencial
+    # pela ordem em que foram cadastradas, para a lista não ficar sem código.
+    try:
+        db.execute("ALTER TABLE empresas ADD COLUMN codigo TEXT")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Backfill idempotente: só mexe em quem ainda está sem código e numera
+    # a partir do maior código existente, sem repetir números.
+    sem_codigo = db.execute(
+        "SELECT id FROM empresas WHERE codigo IS NULL OR TRIM(codigo) = '' "
+        "ORDER BY id"
+    ).fetchall()
+    if sem_codigo:
+        maior = 0
+        for linha in db.execute("SELECT codigo FROM empresas").fetchall():
+            valor = str(linha["codigo"] or "").strip()
+            if valor.isdigit():
+                maior = max(maior, int(valor))
+        for linha in sem_codigo:
+            maior += 1
+            db.execute("UPDATE empresas SET codigo=? WHERE id=?",
+                       (str(maior), linha["id"]))
+        db.commit()
     db.commit()
     _seed_tabelas_base(db)
     _seed_cnae_itens_lc116(db)
@@ -480,22 +533,29 @@ def salvar_permissoes(user_id: int, permissoes: set, conn=None):
 def criar_usuario(
     nome, email, senha, *,
     is_admin=False, ativo=True, permissoes=None, empresa_id=None, conn=None,
-    escritorio_id=None, is_gerente=False,
+    escritorio_id=None, is_gerente=False, origem="interno",
 ):
+    """Cria um usuário.
+
+    ``origem`` separa as duas telas: ``"interno"`` (aba Usuários) e
+    ``"carteira"`` (cliente criado pela Carteira de clientes). Cada origem
+    só aparece na sua própria tela.
+    """
     db = conn or get_db()
     senha_hash, sal = hash_senha(senha)
     import json
     permissoes_json = json.dumps(permissoes or {}, ensure_ascii=False)
+    origem = "carteira" if str(origem).lower() == "carteira" else "interno"
     cur = db.execute(
         """INSERT INTO usuarios (nome, email, senha_hash, sal, is_admin, ativo,
                                  empresa_id, permissoes, criado_em, escritorio_id,
-                                 is_gerente)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 is_gerente, origem)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (nome.strip(), email.strip().lower(), senha_hash, sal,
          1 if is_admin else 0, 1 if ativo else 0,
          empresa_id, permissoes_json,
          datetime.now().isoformat(timespec="seconds"), escritorio_id,
-         1 if is_gerente else 0),
+         1 if is_gerente else 0, origem),
     )
     db.commit()
     return cur.lastrowid
@@ -513,21 +573,30 @@ def buscar_usuario_por_id(user_id, conn=None):
     return db.execute("SELECT * FROM usuarios WHERE id = ?", (user_id,)).fetchone()
 
 
-def listar_usuarios(conn=None, escritorio_id=None):
+def listar_usuarios(conn=None, escritorio_id=None, origem=None):
     """Usuários cadastrados.
 
     Com ``escritorio_id``, devolve apenas os usuários daquele escritório.
-    Sem ele, devolve a carteira inteira (uso restrito ao master).
+    Sem ele, devolve a base inteira (uso restrito ao master/gerente).
+
+    ``origem`` filtra a tela de origem: ``"interno"`` (aba Usuários) ou
+    ``"carteira"`` (clientes criados pela Carteira). Sem ``origem``, devolve
+    as duas — usado só em contextos administrativos internos.
     """
     db = conn or get_db()
+    condicoes = []
+    params = []
     if escritorio_id:
-        return db.execute(
-            "SELECT * FROM usuarios WHERE escritorio_id = ? ORDER BY is_admin DESC, nome",
-            (escritorio_id,),
-        ).fetchall()
-    return db.execute(
-        "SELECT * FROM usuarios ORDER BY is_admin DESC, nome"
-    ).fetchall()
+        condicoes.append("escritorio_id = ?")
+        params.append(escritorio_id)
+    if origem:
+        condicoes.append("COALESCE(origem, 'interno') = ?")
+        params.append(str(origem).lower())
+    sql = "SELECT * FROM usuarios"
+    if condicoes:
+        sql += " WHERE " + " AND ".join(condicoes)
+    sql += " ORDER BY is_admin DESC, nome"
+    return db.execute(sql, tuple(params)).fetchall()
 
 
 def atualizar_usuario(
@@ -1333,16 +1402,17 @@ def listar_logs(limite=100, conn=None):
 def criar_empresa(usuario_id, razao_social, nome_fantasia="", cnpj="",
                   cnae_principal="", cnae_descricao="", cnaes_secundarios="",
                   anexo_sugerido="", anexo_confirmado="", municipio="", uf="",
-                  observacoes="", conn=None):
+                  observacoes="", codigo="", conn=None):
     db = conn or get_db()
     agora = datetime.now().isoformat(timespec="seconds")
+    codigo = _normalizar_codigo(codigo) or proximo_codigo_empresa(db)
     cur = db.execute(
         """INSERT INTO empresas
-           (usuario_id, razao_social, nome_fantasia, cnpj, cnae_principal,
+           (usuario_id, codigo, razao_social, nome_fantasia, cnpj, cnae_principal,
             cnae_descricao, cnaes_secundarios, anexo_sugerido, anexo_confirmado,
             municipio, uf, observacoes, criado_em, atualizado_em)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (usuario_id, razao_social.strip(), nome_fantasia.strip(), cnpj.strip(),
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (usuario_id, codigo, razao_social.strip(), nome_fantasia.strip(), cnpj.strip(),
          cnae_principal.strip(), cnae_descricao.strip(), cnaes_secundarios.strip(),
          (anexo_sugerido or "").upper(), (anexo_confirmado or "").upper(),
          municipio.strip(), uf.strip().upper(), observacoes.strip(), agora, agora),
@@ -1356,6 +1426,60 @@ def buscar_empresa_por_id(empresa_id, conn=None):
     return db.execute("SELECT * FROM empresas WHERE id = ?", (empresa_id,)).fetchone()
 
 
+def _normalizar_codigo(codigo) -> str:
+    """Código da empresa em formato canônico: só dígitos, sem zeros à esquerda.
+
+    ``"007"`` e ``"7"`` são o mesmo código — assim ninguém cria duas empresas
+    com o mesmo número escrito de formas diferentes.
+    """
+    texto = str(codigo or "").strip()
+    if not texto:
+        return ""
+    if texto.isdigit():
+        return str(int(texto))
+    return texto
+
+
+def proximo_codigo_empresa(conn=None) -> str:
+    """Próximo código livre da sequência global (1, 2, 3, ...)."""
+    db = conn or get_db()
+    maior = 0
+    for linha in db.execute("SELECT codigo FROM empresas").fetchall():
+        texto = str(linha["codigo"] or "").strip()
+        if texto.isdigit():
+            maior = max(maior, int(texto))
+    return str(maior + 1)
+
+
+def buscar_empresa_por_codigo(codigo, conn=None):
+    """Empresa com este código (sequência global), ou ``None``."""
+    db = conn or get_db()
+    alvo = _normalizar_codigo(codigo)
+    if not alvo:
+        return None
+    return db.execute(
+        "SELECT * FROM empresas WHERE TRIM(codigo) = ?", (alvo,)
+    ).fetchone()
+
+
+def buscar_empresa_por_cnpj(cnpj, conn=None):
+    """Empresa com este CNPJ (comparado só pelos dígitos), ou ``None``.
+
+    Serve para avisar "esta empresa já está cadastrada" quando alguém digita
+    um CNPJ que outro usuário já registrou.
+    """
+    db = conn or get_db()
+    digitos = "".join(ch for ch in str(cnpj or "") if ch.isdigit())
+    if not digitos:
+        return None
+    sql_digitos = ("REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+                   "IFNULL(cnpj, ''), '.', ''), '/', ''), '-', ''), ' ', ''), "
+                   "'(', '')")
+    return db.execute(
+        f"SELECT * FROM empresas WHERE {sql_digitos} = ?", (digitos,)
+    ).fetchone()
+
+
 def listar_empresas(usuario_id=None, conn=None, usuario_ids=None):
     """Lista empresas.
 
@@ -1365,6 +1489,9 @@ def listar_empresas(usuario_id=None, conn=None, usuario_ids=None):
     - sem filtro: todas (uso interno/admin do sistema).
     """
     db = conn or get_db()
+    # Ordem numérica pelo código: o CAST faz a comparação como número
+    # ("10" depois de "9"); a razão social só desempata.
+    ordem = "ORDER BY CAST(IFNULL(codigo, '') AS INTEGER), razao_social"
     if usuario_ids is not None:
         ids = [int(i) for i in usuario_ids]
         if not ids:
@@ -1372,22 +1499,28 @@ def listar_empresas(usuario_id=None, conn=None, usuario_ids=None):
         marcadores = ",".join("?" for _ in ids)
         return db.execute(
             f"SELECT * FROM empresas WHERE usuario_id IN ({marcadores}) "
-            "ORDER BY razao_social",
+            f"{ordem}",
             ids,
         ).fetchall()
     if usuario_id is not None:
         return db.execute(
-            "SELECT * FROM empresas WHERE usuario_id = ? ORDER BY razao_social",
+            f"SELECT * FROM empresas WHERE usuario_id = ? {ordem}",
             (usuario_id,),
         ).fetchall()
-    return db.execute("SELECT * FROM empresas ORDER BY razao_social").fetchall()
+    return db.execute(f"SELECT * FROM empresas {ordem}").fetchall()
 
 
 def atualizar_empresa(empresa_id, razao_social, nome_fantasia="", cnpj="",
                       cnae_principal="", cnae_descricao="", cnaes_secundarios="",
                       anexo_sugerido="", anexo_confirmado="", municipio="", uf="",
-                      observacoes="", conn=None):
+                      observacoes="", codigo=None, conn=None):
     db = conn or get_db()
+    # ``codigo=None`` mantém o código atual: empresas antigas (ou chamadas que
+    # não passam o campo) nunca perdem a numeração na edição.
+    novo_codigo = _normalizar_codigo(codigo) if codigo is not None else None
+    if novo_codigo:
+        db.execute("UPDATE empresas SET codigo=? WHERE id=?",
+                   (novo_codigo, empresa_id))
     db.execute(
         """UPDATE empresas SET razao_social=?, nome_fantasia=?, cnpj=?,
            cnae_principal=?, cnae_descricao=?, cnaes_secundarios=?,

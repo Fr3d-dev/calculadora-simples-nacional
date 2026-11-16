@@ -321,6 +321,7 @@ def _casar_empresa_extrato(dados_extrato: dict, empresas) -> Optional[object]:
 def _ler_form_empresa() -> dict:
     """Lê os campos do formulário de empresa e devolve um dicionário pronto."""
     return {
+        "codigo": request.form.get("codigo", "").strip(),
         "razao_social": request.form.get("razao_social", "").strip(),
         "nome_fantasia": request.form.get("nome_fantasia", "").strip(),
         "cnpj": consulta_cnpj.formatar_cnpj(request.form.get("cnpj", "")),
@@ -333,6 +334,24 @@ def _ler_form_empresa() -> dict:
         "uf": request.form.get("uf", "").strip(),
         "observacoes": request.form.get("observacoes", "").strip(),
     }
+
+
+def _validar_codigo_empresa(codigo, ignorar_id=None):
+    """Devolve uma mensagem de erro se o código já estiver em uso.
+
+    A sequência é global (um número = uma empresa no sistema inteiro), então
+    ninguém confunde códigos de escritórios diferentes.
+    """
+    codigo = (codigo or "").strip()
+    if not codigo:
+        return None
+    existente = db.buscar_empresa_por_codigo(codigo)
+    if existente and existente["id"] != ignorar_id:
+        return (
+            f"O código {existente['codigo']} já está em uso pela empresa "
+            f"\u201c{existente['razao_social']}\u201d. Escolha outro número."
+        )
+    return None
 
 
 def _registrar_cnae_conhecimento(dados: dict) -> None:
@@ -475,6 +494,15 @@ def _usuario_no_escopo(alvo, usuario=None):
     return db._row_get(alvo, "escritorio_id") == escopo
 
 
+def _e_cliente_da_carteira(usuario):
+    """True se o usuário é um acesso criado pela Carteira de clientes.
+
+    Esses acessos só são gerenciados na tela da Carteira; a aba Usuários
+    recusa abri-los, editá-los ou excluí-los pela URL direta.
+    """
+    if not usuario:
+        return False
+    return str(db._row_get(usuario, "origem") or "interno").lower() == "carteira"
 def _codigo_item_lc116(item: str) -> str:
     """
     Extrai apenas o código do item da LC 116/2003.
@@ -658,7 +686,8 @@ def registrar_rotas(app: Flask):
         total_fat_mes = sum(r["faturamento_mes"] for r in resumos)
         max_rbt12 = max((r["rbt12"] for r in resumos), default=0)
 
-        usuarios = db.listar_usuarios(escritorio_id=_escopo_usuarios()) if usuario["is_admin"] else []
+        usuarios = (db.listar_usuarios(escritorio_id=_escopo_usuarios(), origem="interno")
+                    if usuario["is_admin"] else [])
         filtros = {a: [r for r in resumos if r["anexo"] == a] for a in anexos_dashboard}
 
         return render_template(
@@ -908,12 +937,15 @@ def registrar_rotas(app: Flask):
         """Painel de gerenciamento de usuários (listagem).
 
         Cada escritório enxerga somente os próprios usuários. O master vê a
-        carteira inteira apenas na Carteira, onde cada escritório é isolado.
+        lista inteira apenas na Carteira, onde cada escritório é isolado.
         Durante o modo suporte, a lista acompanha o escritório atendido.
+
+        Clientes nascidos na Carteira (``origem='carteira'``) NÃO aparecem
+        aqui: eles são gerenciados exclusivamente na tela da Carteira.
         """
         try:
             escopo = _escopo_usuarios()
-            usuarios = db.listar_usuarios(escritorio_id=escopo)
+            usuarios = db.listar_usuarios(escritorio_id=escopo, origem="interno")
             empresas = empresas_visiveis()
             return render_template("admin.html", usuarios=usuarios, empresas=empresas)
         except Exception as e:
@@ -996,6 +1028,15 @@ def registrar_rotas(app: Flask):
             flash("Usuário não encontrado.", "erro")
             return redirect(url_for("admin"))
 
+        # Cliente da Carteira é gerenciado só lá: a aba Usuários não abre,
+        # nem por URL direta, o cadastro de um cliente da carteira.
+        if _e_cliente_da_carteira(usuario):
+            flash(
+                "Este acesso é um cliente da Carteira. "
+                "Gerencie-o em Carteira de clientes.",
+                "erro",
+            )
+            return redirect(url_for("admin"))
         # Só o master pode conceder os perfis master/gerente. Para os demais,
         # o perfil do alvo é preservado.
         pode_mexer_perfil = db.eh_master(g.usuario)
@@ -1078,6 +1119,15 @@ def registrar_rotas(app: Flask):
             flash("Usuário não encontrado.", "erro")
             return redirect(url_for("admin"))
 
+        # Excluir um cliente da carteira daqui deixaria o escritório órfão.
+        # A remoção correta é pela própria Carteira.
+        if _e_cliente_da_carteira(alvo):
+            flash(
+                "Este acesso é um cliente da Carteira e não pode ser excluído "
+                "por aqui. Use Carteira de clientes.",
+                "erro",
+            )
+            return redirect(url_for("admin"))
         if db.eh_master(alvo) and not db.eh_master(g.usuario):
             flash("Você não tem permissão para excluir este usuário.", "erro")
             return redirect(url_for("admin"))
@@ -1158,7 +1208,8 @@ def registrar_rotas(app: Flask):
                     flash(e, "erro")
                 return render_template(
                     "carteira_form.html", escritorio=None,
-                    form=request.form, admins=db.listar_usuarios(),
+                    form=request.form,
+                    admins=db.listar_usuarios(origem="interno"),
                     permissoes=db.PERMISSOES_DISPONIVEIS,
                     perms_marcadas=set(_permissoes_do_form()),
                 )
@@ -1171,6 +1222,8 @@ def registrar_rotas(app: Flask):
             uid = db.criar_usuario(
                 admin_nome or razao, admin_email, senha_gerada,
                 is_admin=False, permissoes=_permissoes_do_form(),
+                # Nasce na Carteira: não aparece na aba Usuários.
+                origem="carteira",
             )
             # A empresa é do CLIENTE: usuario_id recebe o id do usuário que
             # acabamos de criar (não o do master). Assim o cliente, ao logar,
@@ -1211,7 +1264,7 @@ def registrar_rotas(app: Flask):
 
         return render_template(
             "carteira_form.html", escritorio=None, form={},
-            admins=db.listar_usuarios(),
+            admins=db.listar_usuarios(origem="interno"),
             permissoes=db.PERMISSOES_DISPONIVEIS,
             perms_marcadas=set(),
         )
@@ -1241,7 +1294,8 @@ def registrar_rotas(app: Flask):
                     flash(e, "erro")
                 return render_template(
                     "carteira_form.html", escritorio=escritorio,
-                    form=request.form, admins=db.listar_usuarios(),
+                    form=request.form,
+                    admins=db.listar_usuarios(origem="interno"),
                     permissoes=db.PERMISSOES_DISPONIVEIS,
                     perms_marcadas=set(_permissoes_do_form()),
                 )
@@ -1294,7 +1348,7 @@ def registrar_rotas(app: Flask):
 
         return render_template(
             "carteira_form.html", escritorio=escritorio, form={},
-            admins=db.listar_usuarios(),
+            admins=db.listar_usuarios(origem="interno"),
             permissoes=db.PERMISSOES_DISPONIVEIS,
             perms_marcadas=(
                 db.get_permissoes(usuario_cliente) if usuario_cliente else set()
@@ -1622,8 +1676,11 @@ def registrar_rotas(app: Flask):
     def empresa_nova():
         if request.method == "POST":
             dados = _ler_form_empresa()
+            erro_codigo = _validar_codigo_empresa(dados["codigo"])
             if not dados["razao_social"]:
                 flash("A razão social é obrigatória.", "erro")
+            elif erro_codigo:
+                flash(erro_codigo, "erro")
             else:
                 empresa_id = db.criar_empresa(g.usuario["id"], **dados)
                 _registrar_cnae_conhecimento(dados)
@@ -1651,6 +1708,7 @@ def registrar_rotas(app: Flask):
             grupos=cnaes.listar_grupos(),
             anexos_simples=list(ANEXOS_TODOS),
             pode_explicar_cnae=db.tem_permissao(g.usuario, "ver_explicacao_cnae"),
+            proximo_codigo=db.proximo_codigo_empresa(),
         )
 
     @app.route("/empresa/<int:empresa_id>/editar", methods=["GET", "POST"])
@@ -1663,8 +1721,11 @@ def registrar_rotas(app: Flask):
 
         if request.method == "POST":
             dados = _ler_form_empresa()
+            erro_codigo = _validar_codigo_empresa(dados["codigo"], ignorar_id=empresa_id)
             if not dados["razao_social"]:
                 flash("A razão social é obrigatória.", "erro")
+            elif erro_codigo:
+                flash(erro_codigo, "erro")
             else:
                 db.atualizar_empresa(empresa_id, **dados)
                 _registrar_cnae_conhecimento(dados)

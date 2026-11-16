@@ -54,6 +54,17 @@
                  placeholder="Ex.: Comercial Exemplo LTDA">
         </div>
         <div>
+          <label for="codigo">Código da empresa</label>
+          <input type="text" id="codigo" name="codigo" inputmode="numeric"
+                 maxlength="12"
+                 value="{{ empresa.codigo if empresa else (proximo_codigo or '') }}"
+                 placeholder="Ex.: 1">
+          <div class="texto-suave" style="margin-top:4px">
+            Número curto para você achar a empresa rapidinho. Deixe em branco
+            para usar o próximo livre.
+          </div>
+        </div>
+        <div>
           <label for="nome_fantasia">Nome fantasia</label>
           <input type="text" id="nome_fantasia" name="nome_fantasia"
                  value="{{ empresa.nome_fantasia if empresa else '' }}">

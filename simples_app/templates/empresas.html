@@ -58,6 +58,7 @@
   <table>
     <thead>
       <tr>
+        <th style="width:80px">Código</th>
         <th>Razão social</th>
         <th>CNPJ</th>
         <th>CNAE principal</th>
@@ -68,6 +69,7 @@
     <tbody>
       {% for e in empresas %}
       <tr>
+        <td><strong>{{ e.codigo or '—' }}</strong></td>
         <td>
           <strong>{{ e.razao_social }}</strong>
           {% if ativa and ativa.id == e.id %}<span class="badge ok" style="margin-left:6px">ativa</span>{% endif %}
