@@ -76,6 +76,26 @@ def validar_cnpj(cnpj: str) -> bool:
     return True
 
 
+def _cnae_7_digitos(valor) -> str:
+    """Normaliza um CNAE para 7 dígitos.
+
+    A BrasilAPI devolve `cnae_fiscal` ora como número, ora como texto, e o
+    zero à esquerda pode se perder na serialização JSON (ex.: 600001 em vez
+    de 0600001 para a divisão 06). Sem isso, `sugerir_anexo()` recebe um
+    código inválido e o Anexo sai errado.
+    """
+    texto = str(valor if valor is not None else "").strip()
+    if not texto:
+        return ""
+    digitos = apenas_digitos(texto)
+    if not digitos:
+        return ""
+    if len(digitos) < 7:
+        # CNAE sempre tem 7 dígitos: completa com zeros à esquerda.
+        digitos = digitos.zfill(7)
+    return digitos
+
+
 def _get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
@@ -118,7 +138,7 @@ def _normalizar_brasilapi(d: dict) -> dict:
         "cnpj": formatar_cnpj(d.get("cnpj") or ""),
         "razao_social": (d.get("razao_social") or "").strip(),
         "nome_fantasia": (d.get("nome_fantasia") or "").strip(),
-        "cnae_principal": str(d.get("cnae_fiscal") or "").strip(),
+        "cnae_principal": _cnae_7_digitos(d.get("cnae_fiscal")),
         "cnae_descricao": (d.get("cnae_fiscal_descricao") or "").strip(),
         "cnaes_secundarios": secundarios,
         "municipio": (d.get("municipio") or "").strip(),
@@ -145,8 +165,7 @@ def _normalizar_receitaws(d: dict) -> dict:
             secundarios.append({"codigo": codigo, "descricao": descricao})
 
     principal = (d.get("atividade_principal") or [{}])[0]
-    cnae_principal = str(principal.get("code") or "")
-    cnae_principal = cnae_principal.replace(".", "").replace("-", "").replace("/", "").strip()
+    cnae_principal = _cnae_7_digitos(principal.get("code"))
 
     simples = (d.get("simples") or {})
     mei = (d.get("simei") or {})
@@ -165,9 +184,12 @@ def _normalizar_receitaws(d: dict) -> dict:
         "porte": (d.get("porte") or "").strip(),
         "natureza_juridica": (d.get("natureza_juridica") or "").strip(),
         "data_inicio_atividade": (d.get("abertura") or "").strip(),
-        "opcao_pelo_simples": simples.get("mei") if simples else None,
+        # ReceitaWS: `simples.optante` indica opção pelo Simples Nacional e
+        # `simei.optante` indica opção pelo MEI (antes lia-se a chave `mei`,
+        # que não existe nessa API, deixando o indicativo sempre nulo).
+        "opcao_pelo_simples": simples.get("optante") if simples else None,
         "data_opcao_pelo_simples": (simples.get("data_opcao") or "").strip() if simples else "",
-        "opcao_pelo_mei": mei.get("mei") if mei else None,
+        "opcao_pelo_mei": mei.get("optante") if mei else None,
         "regime_tributario": [],
         "email": (d.get("email") or "").strip(),
         "telefone": (d.get("telefone") or "").strip(),
