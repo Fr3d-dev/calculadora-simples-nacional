@@ -13,6 +13,18 @@
 <form method="post" class="card">
   <h3 style="margin-top:0">Dados do cliente</h3>
 
+  <div class="campo">
+    <label for="codigo">Código do cliente</label>
+    <input type="text" id="codigo" name="codigo" maxlength="20"
+           style="max-width:160px"
+           placeholder="Ex.: {{ proximo_codigo or '1' }}"
+           value="{{ form.get('codigo') if form.get('codigo') is not none else ((escritorio.codigo if escritorio else proximo_codigo) or '') }}">
+    <small class="texto-suave">
+      Número que identifica o cliente na carteira. A lista é ordenada por ele.
+      Em branco = usa o próximo número livre.
+    </small>
+  </div>
+
   {# Primeiro passo do cadastro: o CNPJ puxa os dados da Receita. #}
   <div class="campo">
     <label for="cnpj">CNPJ</label>

@@ -108,6 +108,9 @@ CREATE TABLE IF NOT EXISTS tabelas_base (
 CREATE TABLE IF NOT EXISTS escritorios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     usuario_id INTEGER NOT NULL UNIQUE,
+    -- Código curto do cliente na carteira (1, 2, 3, ...). Definido no
+    -- cadastro; a lista da Carteira é ordenada por ele numericamente.
+    codigo TEXT,
     cnpj TEXT,
     razao_social TEXT NOT NULL,
     nome_fantasia TEXT,
@@ -310,6 +313,30 @@ def init_db():
                        (str(maior), linha["id"]))
         db.commit()
     db.commit()
+    # Migração: código curto do cliente na Carteira (mesma ideia do código
+    # da empresa). Aditiva; nos bancos antigos os clientes já cadastrados
+    # são numerados pela ordem de criação, para a lista não ficar sem código.
+    try:
+        db.execute("ALTER TABLE escritorios ADD COLUMN codigo TEXT")
+        db.commit()
+    except Exception:
+        pass  # coluna já existe
+    # Backfill idempotente do código do escritório.
+    sem_codigo_esc = db.execute(
+        "SELECT id FROM escritorios WHERE codigo IS NULL OR TRIM(codigo) = '' "
+        "ORDER BY id"
+    ).fetchall()
+    if sem_codigo_esc:
+        maior_esc = 0
+        for linha in db.execute("SELECT codigo FROM escritorios").fetchall():
+            valor = str(linha["codigo"] or "").strip()
+            if valor.isdigit():
+                maior_esc = max(maior_esc, int(valor))
+        for linha in sem_codigo_esc:
+            maior_esc += 1
+            db.execute("UPDATE escritorios SET codigo=? WHERE id=?",
+                       (str(maior_esc), linha["id"]))
+        db.commit()
     _seed_tabelas_base(db)
     _seed_cnae_itens_lc116(db)
     _seed_cnae_anexos(db)
@@ -1209,7 +1236,7 @@ def excluir_cnae_anexo(registro_id, conn=None):
 
 def criar_escritorio(
     usuario_id, razao_social, *,
-    cnpj="", nome_fantasia="", email="", telefone="",
+    codigo=None, cnpj="", nome_fantasia="", email="", telefone="",
     municipio="", uf="", observacoes="", ativo=True, senha_clara=None,
     conn=None,
 ):
@@ -1220,26 +1247,59 @@ def criar_escritorio(
 
     ``senha_clara`` é a senha de acesso em texto legível, guardada só para
     o master reapresentá-la ao cliente. Não é usada na autenticação.
+
+    ``codigo`` é o código do cliente na carteira. Se não vier, usa o próximo
+    número livre da sequência.
     """
     db = conn or get_db()
     agora = datetime.now().isoformat(timespec="seconds")
+    codigo = _normalizar_codigo(codigo) or proximo_codigo_escritorio(db)
     cur = db.execute(
         """INSERT INTO escritorios
-           (usuario_id, cnpj, razao_social, nome_fantasia, email, telefone,
-            municipio, uf, observacoes, ativo, senha_clara,
+           (usuario_id, codigo, cnpj, razao_social, nome_fantasia, email,
+            telefone, municipio, uf, observacoes, ativo, senha_clara,
             criado_em, atualizado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (usuario_id, cnpj or "", razao_social.strip(), nome_fantasia or "",
-         email or "", telefone or "", municipio or "", (uf or "").upper(),
-         observacoes or "", 1 if ativo else 0, senha_clara,
-         agora, agora),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (usuario_id, codigo, cnpj or "", razao_social.strip(),
+         nome_fantasia or "", email or "", telefone or "", municipio or "",
+         (uf or "").upper(), observacoes or "", 1 if ativo else 0,
+         senha_clara, agora, agora),
     )
     db.commit()
     return cur.lastrowid
 
 
+def proximo_codigo_escritorio(conn=None) -> str:
+    """Próximo código livre da sequência de clientes da Carteira."""
+    db = conn or get_db()
+    maior = 0
+    for linha in db.execute("SELECT codigo FROM escritorios").fetchall():
+        texto = str(linha["codigo"] or "").strip()
+        if texto.isdigit():
+            maior = max(maior, int(texto))
+    return str(maior + 1)
+
+
+def buscar_escritorio_por_codigo(codigo, ignorar_id=None, conn=None):
+    """Escritório com este código, ou ``None``."""
+    db = conn or get_db()
+    alvo = _normalizar_codigo(codigo)
+    if not alvo:
+        return None
+    sql = "SELECT * FROM escritorios WHERE TRIM(codigo) = ?"
+    params = [alvo]
+    if ignorar_id is not None:
+        sql += " AND id <> ?"
+        params.append(ignorar_id)
+    return db.execute(sql, tuple(params)).fetchone()
+
+
 def listar_escritorios(busca=None, conn=None):
-    """Lista os escritórios da carteira, com dados do usuário admin."""
+    """Lista os escritórios da carteira, com dados do usuário admin.
+
+    A ordem é numérica pelo código (1, 2, 3, 10, 11...), não alfabética —
+    sem isso o 10 apareceria antes do 2. Clientes sem código vão para o fim.
+    """
     db = conn or get_db()
     sql = """
         SELECT e.*, u.nome AS usuario_nome, u.email AS usuario_email,
@@ -1250,10 +1310,18 @@ def listar_escritorios(busca=None, conn=None):
     params = ()
     if busca:
         termo = f"%{busca.strip()}%"
-        sql += """ WHERE e.razao_social LIKE ? OR e.nome_fantasia LIKE ?
-                      OR e.cnpj LIKE ? OR u.nome LIKE ? OR u.email LIKE ?"""
-        params = (termo, termo, termo, termo, termo)
-    sql += " ORDER BY e.razao_social"
+        sql += """ WHERE e.codigo LIKE ? OR e.razao_social LIKE ?
+                      OR e.nome_fantasia LIKE ? OR e.cnpj LIKE ?
+                      OR u.nome LIKE ? OR u.email LIKE ?"""
+        params = (termo, termo, termo, termo, termo, termo)
+    sql += (
+        " ORDER BY CASE WHEN TRIM(IFNULL(e.codigo, '')) = '' THEN 1 ELSE 0 END,"
+        " CASE WHEN TRIM(IFNULL(e.codigo, '')) <> '' "
+        "      AND TRIM(e.codigo) NOT GLOB '*[^0-9]*' "
+        "      THEN CAST(TRIM(e.codigo) AS INTEGER) ELSE 0 END,"
+        " CAST(TRIM(IFNULL(e.codigo, '')) AS INTEGER),"
+        " e.razao_social COLLATE NOCASE"
+    )
     return db.execute(sql, params).fetchall()
 
 
@@ -1278,7 +1346,7 @@ def buscar_escritorio_por_usuario(usuario_id, conn=None):
 
 def atualizar_escritorio(
     escritorio_id, razao_social, *,
-    cnpj="", nome_fantasia="", email="", telefone="",
+    codigo=None, cnpj="", nome_fantasia="", email="", telefone="",
     municipio="", uf="", observacoes="", ativo=True, senha_clara=None,
     conn=None,
 ):
@@ -1287,30 +1355,42 @@ def atualizar_escritorio(
     ``senha_clara`` só é sobrescrita quando informada (não-None). Com None,
     a senha legível atual é preservada — evita apagar a senha ao editar
     apenas os dados cadastrais.
+
+    ``codigo`` com None preserva o código atual; com texto vazio volta a
+    usar o próximo número livre da sequência.
     """
     db = conn or get_db()
+    if codigo is None:
+        atual = db.execute(
+            "SELECT codigo FROM escritorios WHERE id=?", (escritorio_id,)
+        ).fetchone()
+        codigo_final = (atual["codigo"] if atual else "") or ""
+    else:
+        codigo_final = _normalizar_codigo(codigo) or proximo_codigo_escritorio(db)
     if senha_clara is not None:
         db.execute(
             """UPDATE escritorios
-                  SET cnpj=?, razao_social=?, nome_fantasia=?, email=?,
+                  SET codigo=?, cnpj=?, razao_social=?, nome_fantasia=?, email=?,
                       telefone=?, municipio=?, uf=?, observacoes=?, ativo=?,
                       senha_clara=?, atualizado_em=?
                 WHERE id=?""",
-            (cnpj or "", razao_social.strip(), nome_fantasia or "", email or "",
-             telefone or "", municipio or "", (uf or "").upper(),
-             observacoes or "", 1 if ativo else 0, senha_clara,
+            (codigo_final, cnpj or "", razao_social.strip(),
+             nome_fantasia or "", email or "", telefone or "",
+             municipio or "", (uf or "").upper(), observacoes or "",
+             1 if ativo else 0, senha_clara,
              datetime.now().isoformat(timespec="seconds"), escritorio_id),
         )
     else:
         db.execute(
             """UPDATE escritorios
-                  SET cnpj=?, razao_social=?, nome_fantasia=?, email=?,
+                  SET codigo=?, cnpj=?, razao_social=?, nome_fantasia=?, email=?,
                       telefone=?, municipio=?, uf=?, observacoes=?, ativo=?,
                       atualizado_em=?
                 WHERE id=?""",
-            (cnpj or "", razao_social.strip(), nome_fantasia or "", email or "",
-             telefone or "", municipio or "", (uf or "").upper(),
-             observacoes or "", 1 if ativo else 0,
+            (codigo_final, cnpj or "", razao_social.strip(),
+             nome_fantasia or "", email or "", telefone or "",
+             municipio or "", (uf or "").upper(), observacoes or "",
+             1 if ativo else 0,
              datetime.now().isoformat(timespec="seconds"), escritorio_id),
         )
     db.commit()

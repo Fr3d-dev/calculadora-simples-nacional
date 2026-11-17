@@ -1192,6 +1192,7 @@ def registrar_rotas(app: Flask):
             admin_email = (request.form.get("admin_email") or "").strip().lower()
             admin_nome = (request.form.get("admin_nome") or "").strip()
             admin_senha = request.form.get("admin_senha") or ""
+            codigo = (request.form.get("codigo") or "").strip()
 
             erros = []
             if not razao:
@@ -1202,6 +1203,10 @@ def registrar_rotas(app: Flask):
                 erros.append("Já existe um usuário com este e-mail.")
             if admin_senha and len(admin_senha) < 6:
                 erros.append("A senha deve ter no mínimo 6 caracteres.")
+            if codigo and db.buscar_escritorio_por_codigo(codigo):
+                erros.append(
+                    f"Já existe um cliente da carteira com o código {codigo}."
+                )
 
             if erros:
                 for e in erros:
@@ -1212,6 +1217,7 @@ def registrar_rotas(app: Flask):
                     admins=db.listar_usuarios(origem="interno"),
                     permissoes=db.PERMISSOES_DISPONIVEIS,
                     perms_marcadas=set(_permissoes_do_form()),
+                    proximo_codigo=db.proximo_codigo_escritorio(),
                 )
 
             # Cria o usuário do cliente e o vínculo na carteira.
@@ -1238,6 +1244,7 @@ def registrar_rotas(app: Flask):
             )
             escritorio_id = db.criar_escritorio(
                 uid, razao,
+                codigo=codigo or None,
                 cnpj=request.form.get("cnpj") or "",
                 nome_fantasia=request.form.get("nome_fantasia") or "",
                 email=request.form.get("email") or "",
@@ -1267,6 +1274,7 @@ def registrar_rotas(app: Flask):
             admins=db.listar_usuarios(origem="interno"),
             permissoes=db.PERMISSOES_DISPONIVEIS,
             perms_marcadas=set(),
+            proximo_codigo=db.proximo_codigo_escritorio(),
         )
 
     @app.route("/carteira/<int:escritorio_id>/editar", methods=["GET", "POST"])
@@ -1282,12 +1290,20 @@ def registrar_rotas(app: Flask):
         if request.method == "POST":
             razao = (request.form.get("razao_social") or "").strip()
             nova_senha = (request.form.get("admin_senha") or "").strip()
+            codigo_bruto = request.form.get("codigo")
 
             erros = []
             if not razao:
                 erros.append("Informe a razão social.")
             if nova_senha and len(nova_senha) < 6:
                 erros.append("A senha deve ter no mínimo 6 caracteres.")
+            if (codigo_bruto or "").strip() and db.buscar_escritorio_por_codigo(
+                codigo_bruto, ignorar_id=escritorio_id
+            ):
+                erros.append(
+                    f"Já existe outro cliente da carteira com o código "
+                    f"{(codigo_bruto or '').strip()}."
+                )
 
             if erros:
                 for e in erros:
@@ -1298,6 +1314,7 @@ def registrar_rotas(app: Flask):
                     admins=db.listar_usuarios(origem="interno"),
                     permissoes=db.PERMISSOES_DISPONIVEIS,
                     perms_marcadas=set(_permissoes_do_form()),
+                    proximo_codigo=db.proximo_codigo_escritorio(),
                 )
 
             ativo = bool(request.form.get("ativo"))
@@ -1305,6 +1322,7 @@ def registrar_rotas(app: Flask):
 
             db.atualizar_escritorio(
                 escritorio_id, razao,
+                codigo=codigo_bruto,
                 cnpj=request.form.get("cnpj") or "",
                 nome_fantasia=request.form.get("nome_fantasia") or "",
                 email=request.form.get("email") or "",
@@ -1353,6 +1371,7 @@ def registrar_rotas(app: Flask):
             perms_marcadas=(
                 db.get_permissoes(usuario_cliente) if usuario_cliente else set()
             ),
+            proximo_codigo=db.proximo_codigo_escritorio(),
         )
 
     @app.route("/carteira/<int:escritorio_id>/excluir", methods=["POST"])
